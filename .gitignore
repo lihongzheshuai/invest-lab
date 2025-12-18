@@ -22,5 +22,3 @@ ENV/
 .DS_Store
 Thumbs.db
 
-# Data Cache
-data/
