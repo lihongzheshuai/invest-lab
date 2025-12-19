@@ -47,6 +47,24 @@ TRANS = {
         'warn_no_funds_file': "未找到基金列表文件，请手动输入基金代码。",
         'info_no_changes': "未检测到持仓变动或数据不匹配。",
         
+        # Search Feature
+        'tab_overview': "概览",
+        'tab_analysis': "基金分析",
+        'tab_search': "重仓股反查",
+        'label_search_stocks': "输入股票名称或代码 (逗号分隔)",
+        'btn_search': "查询持仓基金",
+        'col_match_count': "匹配数量",
+        'col_match_degree': "匹配度",
+        'col_matched_stocks': "匹配股票明细",
+        'header_search_results': "查询结果 (按匹配度排序)",
+        'btn_update_data': "批量更新持仓数据 (Top 50)",
+        'msg_updating': "正在批量更新数据，这可能需要几分钟...",
+        'msg_update_complete': "更新完成: 成功 {success}/{total}",
+        
+        # Overview Feature
+        'stat_total_funds': "基金总数",
+        'header_type_dist': "基金类型分布",
+        
         # DataFrame Columns (Analyzer output)
         'col_stock_code': "股票代码",
         'col_stock_name': "股票名称",

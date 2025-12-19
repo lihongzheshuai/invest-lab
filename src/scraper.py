@@ -1,10 +1,10 @@
 import akshare as ak
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from src.data_manager import load_fund_nav_from_cache, save_fund_nav_to_cache, \
                                  load_fund_holdings_from_cache, save_fund_holdings_to_cache, \
-                                 update_fund_status
+                                 update_fund_status, get_nav_last_date
 from src.source_manager import get_active_source, update_source_status
 
 def fetch_fund_info(fund_code: str) -> pd.DataFrame:
@@ -69,25 +69,46 @@ def _fetch_nav_akshare(fund_code: str) -> pd.DataFrame:
 
 def fetch_fund_nav(fund_code: str, start_date: str = "20200101", end_date: str = None) -> pd.DataFrame:
     """
-    Fetch historical NAV, prioritizing cached data, then using managed data sources.
+    Fetch historical NAV, prioritizing cached data if fresh enough.
     """
     if not end_date:
         end_date = datetime.now().strftime("%Y%m%d")
+        
+    # Check freshness
+    last_cached_date_str = get_nav_last_date(fund_code)
+    is_fresh = False
     
-    # 1. Try Cache
-    cached_df = load_fund_nav_from_cache(fund_code)
-    if not cached_df.empty:
-        cached_df['净值日期'] = pd.to_datetime(cached_df['净值日期'])
-        mask = (cached_df['净值日期'] >= pd.to_datetime(start_date)) & (cached_df['净值日期'] <= pd.to_datetime(end_date))
-        return cached_df.loc[mask]
+    if last_cached_date_str:
+        last_cached = pd.to_datetime(last_cached_date_str)
+        target_end = pd.to_datetime(end_date)
+        
+        # If cache covers up to the target end date (or very close, e.g. within 3 days for weekends)
+        # We consider it fresh.
+        # Trading data stops on Friday. If today is Sunday, last data is Friday (2 days ago).
+        days_diff = (target_end - last_cached).days
+        if days_diff <= 3: 
+            is_fresh = True
+    
+    # 1. Try Cache if fresh
+    if is_fresh:
+        cached_df = load_fund_nav_from_cache(fund_code)
+        if not cached_df.empty:
+            cached_df['净值日期'] = pd.to_datetime(cached_df['净值日期'])
+            mask = (cached_df['净值日期'] >= pd.to_datetime(start_date)) & (cached_df['净值日期'] <= pd.to_datetime(end_date))
+            return cached_df.loc[mask]
 
-    # 2. Get Active Source
+    # 2. Get Active Source (if not fresh or cache missing)
     source = get_active_source('nav')
     if not source:
         print("No active data source found for 'nav'.")
+        # Fallback to cache even if stale if no source available
+        cached_df = load_fund_nav_from_cache(fund_code)
+        if not cached_df.empty:
+             cached_df['净值日期'] = pd.to_datetime(cached_df['净值日期'])
+             return cached_df
         return pd.DataFrame()
 
-    print(f"Fetching NAV for {fund_code} using source: {source['name']}...")
+    print(f"Fetching NAV for {fund_code} using source: {source['name']} (Freshness check: {'Passed' if is_fresh else 'Failed/Missing'})...")
 
     # 3. Fetch from Source
     try:
@@ -116,4 +137,36 @@ def fetch_fund_nav(fund_code: str, start_date: str = "20200101", end_date: str =
     except Exception as e:
         print(f"Error fetching NAV from {source['name']}: {e}")
         update_source_status(source['id'], False)
+        # Fallback to cache if fetch fails
+        cached_df = load_fund_nav_from_cache(fund_code)
+        if not cached_df.empty:
+            cached_df['净值日期'] = pd.to_datetime(cached_df['净值日期'])
+            return cached_df
         return pd.DataFrame()
+
+def batch_fetch_holdings(fund_codes: list[str], year: int, progress_callback=None):
+    """
+    Batch fetch holdings for a list of funds.
+    
+    Args:
+        fund_codes: List of fund codes.
+        year: Year to fetch.
+        progress_callback: Optional function(current, total, message) to report progress.
+    """
+    total = len(fund_codes)
+    success_count = 0
+    
+    for i, code in enumerate(fund_codes):
+        if progress_callback:
+            progress_callback(i, total, f"Fetching {code}...")
+            
+        try:
+            # We use fetch_fund_holdings which handles caching and sources
+            df = fetch_fund_holdings(code, year)
+            if not df.empty:
+                success_count += 1
+        except Exception as e:
+            print(f"Error processing {code}: {e}")
+            
+    if progress_callback:
+        progress_callback(total, total, f"Completed. Success: {success_count}/{total}")

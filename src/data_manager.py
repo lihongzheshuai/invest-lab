@@ -139,6 +139,37 @@ def load_fund_holdings_from_cache(fund_code: str, year: int) -> pd.DataFrame:
         return df
     return pd.DataFrame()
 
+def get_nav_last_date(fund_code: str) -> str:
+    """
+    Returns the latest date (YYYY-MM-DD) found in the cached NAV file.
+    Returns None if file doesn't exist or is empty.
+    """
+    file_path = os.path.join(NAV_DIR, f'{fund_code}.csv')
+    if not os.path.exists(file_path):
+        return None
+    
+    try:
+        # Read only the '净值日期' column to save memory/time? 
+        # But pandas reads full file mostly.
+        # Use header=0 and just read the relevant column if possible, but reading full is safe.
+        df = pd.read_csv(file_path)
+        if df.empty or '净值日期' not in df.columns:
+            return None
+            
+        # Assuming sorted, but max is safer
+        # Ensure datetime conversion
+        dates = pd.to_datetime(df['净值日期'], errors='coerce')
+        last_date = dates.max()
+        
+        if pd.isna(last_date):
+            return None
+            
+        return last_date.strftime("%Y-%m-%d")
+        
+    except Exception as e:
+        print(f"Error checking NAV last date for {fund_code}: {e}")
+        return None
+
 if __name__ == "__main__":
     ensure_data_dir_structure()
     fetch_and_save_fund_list()
