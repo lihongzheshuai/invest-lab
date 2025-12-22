@@ -2,13 +2,14 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import os
+import asyncio
 from datetime import datetime, date
 
 from src.scraper import fetch_fund_info, fetch_fund_holdings, fetch_fund_nav, batch_fetch_holdings
-from src.analyzer import analyze_position_changes, search_funds_by_stocks
+from src.analyzer import analyze_position_changes, search_funds_by_stocks, search_funds_by_stocks_async, check_cache_coverage, query_reverse_index_direct, load_reverse_index
 from src.translations import get_text, translate_df_columns, translate_change_types
 from src.data_manager import FUNDS_LIST_PATH, HOLDINGS_DIR, fetch_and_save_fund_list
-from src.utils import get_latest_report_quarter
+from src.utils import get_latest_report_quarter, run_async_loop
 
 st.set_page_config(page_title=get_text('app_title'), layout="wide")
 
@@ -40,7 +41,10 @@ def get_quarter_date_range(year, quarter):
 # We force reload if '基金类型' is missing to support the new feature
 funds_df = pd.DataFrame()
 if os.path.exists(FUNDS_LIST_PATH):
-    funds_df = pd.read_csv(FUNDS_LIST_PATH, dtype={'基金代码': str})
+    try:
+        funds_df = pd.read_csv(FUNDS_LIST_PATH, dtype={'基金代码': str}, encoding='utf-8-sig')
+    except Exception as e:
+        st.error(f"无法读取基金列表文件: {e}")
     
     if not funds_df.empty:
         # Construct Display Name
@@ -49,16 +53,35 @@ if os.path.exists(FUNDS_LIST_PATH):
         else:
             funds_df['display_name'] = funds_df['基金简称'] + " (" + funds_df['基金代码'] + ")"
 
-# Sidebar
-st.sidebar.header(get_text('sidebar_header'))
+# --- Custom CSS for Styled Tabs ---
+st.markdown("""
+<style>
+    /* Style the Main Title */
+    h1 {
+        font-size: 2.0rem !important;
+        padding-bottom: 1rem;
+    }
 
-# Mode Selection - "Overview" added as default
-mode = st.sidebar.radio(
-    "功能模式",
-    [get_text('tab_overview'), get_text('tab_analysis'), get_text('tab_search')]
-)
+    /* Style the Tab Labels */
+    button[data-baseweb="tab"] div p {
+        font-size: 1.2rem;
+        font-weight: 600;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-if mode == get_text('tab_overview'):
+# --- Top Level Menu (Tabs) ---
+tab_names = [
+    f"📊 {get_text('tab_overview')}", 
+    f"🔍 {get_text('tab_analysis')}", 
+    f"📈 {get_text('tab_search')}"
+]
+tab_overview, tab_analysis, tab_search = st.tabs(tab_names)
+
+# ==========================================
+# Tab 1: Overview
+# ==========================================
+with tab_overview:
     st.subheader(get_text('tab_overview'))
     
     if not funds_df.empty:
@@ -125,8 +148,30 @@ if mode == get_text('tab_overview'):
                 filtered_funds = funds_df[funds_df['基金类型'] == st.session_state.selected_fund_type]
             
             st.write(f"基金清单 ({len(filtered_funds)}):")
+            
+            # --- Pagination Controls ---
+            col_p1, col_p2, col_p3 = st.columns([1, 1, 3])
+            
+            with col_p1:
+                page_size = st.selectbox("每页显示 / Per Page", [20, 50, 100], index=0)
+            
+            total_rows = len(filtered_funds)
+            total_pages = (total_rows // page_size) + (1 if total_rows % page_size > 0 else 0)
+            
+            with col_p2:
+                page_number = st.number_input("页码 / Page", min_value=1, max_value=max(1, total_pages), value=1)
+                
+            # Calculate Slice
+            start_idx = (page_number - 1) * page_size
+            end_idx = min(start_idx + page_size, total_rows)
+            
+            # Display Slice
+            st.caption(f"显示第 {start_idx + 1} 到 {end_idx} 条，共 {total_rows} 条")
+            
+            current_page_df = filtered_funds.iloc[start_idx:end_idx]
+            
             st.dataframe(
-                filtered_funds[['基金代码', '基金简称', '基金类型']], 
+                current_page_df[['基金代码', '基金简称', '基金类型']], 
                 use_container_width=True,
                 hide_index=True
             )
@@ -140,73 +185,106 @@ if mode == get_text('tab_overview'):
                 fetch_and_save_fund_list()
                 st.rerun()
 
-elif mode == get_text('tab_analysis'):
-    # Fund Selection Method
-    selection_method = st.sidebar.radio(
-        get_text('label_fund_selection_method'),
-        [get_text('option_select_fund_name'), get_text('option_enter_fund_code')]
-    )
+# ==========================================
+# Tab 2: Analysis
+# ==========================================
+with tab_analysis:
+    # --- Control Panel (Moved from Sidebar) ---
+    with st.container():
+        c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
+        
+        with c1:
+            # Fund Selection Method
+            selection_method = st.radio(
+                get_text('label_fund_selection_method'),
+                [get_text('option_select_fund_name'), get_text('option_enter_fund_code')],
+                horizontal=True,
+                label_visibility="collapsed"
+            )
 
-    selected_fund_code = ""
-    if selection_method == get_text('option_select_fund_name'):
-        if not funds_df.empty:
-            fund_options = funds_df['display_name'].tolist()
-            # Add a default empty selection to prevent immediate trigger on first load
-            fund_options.insert(0, "--请选择基金--")
-            selected_fund_display = st.sidebar.selectbox(get_text('label_select_fund'), fund_options, index=0)
-            if selected_fund_display != "--请选择基金--":
-                # Extract code from display name, or filter df
-                # display name format: Name (Code) - Type
-                # Safest to filter df
-                selected_row = funds_df[funds_df['display_name'] == selected_fund_display]
-                if not selected_row.empty:
-                    selected_fund_code = selected_row['基金代码'].iloc[0]
-        else:
-            st.sidebar.warning(get_text('warn_no_funds_file'))
-            selected_fund_code = st.sidebar.text_input(get_text('label_enter_code'), value="000248")
-    elif selection_method == get_text('option_enter_fund_code'):
-        selected_fund_code = st.sidebar.text_input(get_text('label_enter_code'), value="000248")
+            selected_fund_code = ""
+            if selection_method == get_text('option_select_fund_name'):
+                if not funds_df.empty:
+                    fund_options = funds_df['display_name'].tolist()
+                    fund_options.insert(0, "--请选择基金--")
+                    selected_fund_display = st.selectbox(get_text('label_select_fund'), fund_options, index=0)
+                    if selected_fund_display != "--请选择基金--":
+                        selected_row = funds_df[funds_df['display_name'] == selected_fund_display]
+                        if not selected_row.empty:
+                            selected_fund_code = selected_row['基金代码'].iloc[0]
+                else:
+                    st.warning(get_text('warn_no_funds_file'))
+                    selected_fund_code = st.text_input(get_text('label_enter_code'), value="000248")
+            elif selection_method == get_text('option_enter_fund_code'):
+                selected_fund_code = st.text_input(get_text('label_enter_code'), value="000248")
 
-    fund_code_to_analyze = selected_fund_code.strip()
+            fund_code_to_analyze = selected_fund_code.strip()
 
-    # Year and Quarter Selection
-    year = st.sidebar.number_input(get_text('label_year'), min_value=2020, max_value=2025, value=2024)
+        with c2:
+            # Year
+            year = st.number_input(get_text('label_year'), min_value=2020, max_value=2025, value=2024)
 
-    quarter_map = {
-        get_text('quarter_q1'): 1,
-        get_text('quarter_q2'): 2,
-        get_text('quarter_q3'): 3,
-        get_text('quarter_q4'): 4
-    }
-    quarter_label = st.sidebar.selectbox(get_text('label_quarter'), list(quarter_map.keys()), index=3) # Default Q4
-    curr_q = quarter_map[quarter_label]
+        with c3:
+            # Quarter
+            quarter_map = {
+                get_text('quarter_q1'): 1,
+                get_text('quarter_q2'): 2,
+                get_text('quarter_q3'): 3,
+                get_text('quarter_q4'): 4
+            }
+            quarter_label = st.selectbox(get_text('label_quarter'), list(quarter_map.keys()), index=3) # Default Q4
+            curr_q = quarter_map[quarter_label]
 
-    # Analyze Button - Only enable if fund_code_to_analyze is not empty
-    if st.sidebar.button(get_text('btn_analyze'), disabled=(not fund_code_to_analyze)):
+        with c4:
+            # Analyze Button
+            st.write("") # Spacer
+            st.write("") # Spacer
+            analyze_clicked = st.button(get_text('btn_analyze'), disabled=(not fund_code_to_analyze), use_container_width=True)
+
+    st.divider()
+
+    # Analyze Logic
+    if analyze_clicked or fund_code_to_analyze: 
+        if analyze_clicked:
+            st.session_state.analyzing_fund = fund_code_to_analyze
+            st.session_state.analyzing_year = year
+            st.session_state.analyzing_q = curr_q
+        
+        # Check if we have an active analysis in session or if inputs are valid (auto-show)
+        # We prioritize session state if button was clicked to lock in the view, 
+        # but also allow dynamic updates if the user just changes dropdowns?
+        # Actually, let's strictly follow the 'analyze_clicked' pattern or session state.
+        
+        pass
+
+    if 'analyzing_fund' in st.session_state and st.session_state.analyzing_fund:
+        f_code = st.session_state.analyzing_fund
+        y = st.session_state.analyzing_year
+        q = st.session_state.analyzing_q
+        
         with st.spinner(get_text('msg_fetching')):
             # 1. Basic Info - Retained for fund name display in header
-            info = fetch_fund_info(fund_code_to_analyze)
-            st.header(get_text('header_fund', fund_code=fund_code_to_analyze))
+            info = fetch_fund_info(f_code)
+            st.header(get_text('header_fund', fund_code=f_code))
             if not info.empty:
                 st.dataframe(info)
             
             # 2. Net Asset Value (NAV) Trend
             st.subheader(get_text('chart_nav_title'))
-            # fetch_fund_nav now automatically checks freshness and updates if needed
-            nav_df = fetch_fund_nav(fund_code_to_analyze)
+            nav_df = fetch_fund_nav(f_code)
             if not nav_df.empty:
                 nav_df['净值日期'] = pd.to_datetime(nav_df['净值日期'])
                 nav_df = nav_df.sort_values('净值日期')
 
                 # Highlight current selected quarter
-                start_date_highlight, end_date_highlight = get_quarter_date_range(year, curr_q)
+                start_date_highlight, end_date_highlight = get_quarter_date_range(y, q)
                 
                 fig = px.line(nav_df, x='净值日期', y='单位净值', title=get_text('chart_nav_title'))
                 
                 if start_date_highlight and end_date_highlight:
                     fig.add_vrect(x0=start_date_highlight, x1=end_date_highlight, 
                                   fillcolor="LightSalmon", opacity=0.4, line_width=0, 
-                                  annotation_text=f"{year} Q{curr_q}", annotation_position="top left")
+                                  annotation_text=f"{y} Q{q}", annotation_position="top left")
                 
                 st.plotly_chart(fig, width='stretch')
             else:
@@ -216,35 +294,35 @@ elif mode == get_text('tab_analysis'):
             st.subheader(get_text('header_portfolio'))
             
             # Calculate Previous Quarter
-            if curr_q == 1:
-                prev_year = year - 1
+            if q == 1:
+                prev_year = y - 1
                 prev_q = 4
             else:
-                prev_year = year
-                prev_q = curr_q - 1
+                prev_year = y
+                prev_q = q - 1
                 
             # Fetch Data
-            df_curr_year = fetch_fund_holdings(fund_code_to_analyze, year)
+            df_curr_year = fetch_fund_holdings(f_code, y)
             
-            if prev_year != year:
-                df_prev_year = fetch_fund_holdings(fund_code_to_analyze, prev_year)
+            if prev_year != y:
+                df_prev_year = fetch_fund_holdings(f_code, prev_year)
             else:
                 df_prev_year = df_curr_year
                 
             # Helper to filter quarter
-            def get_quarter_data(df, y, q):
+            def get_quarter_data(df, year_val, q_val):
                 if df.empty or '季度' not in df.columns:
                     return pd.DataFrame()
-                mask = df['季度'].astype(str).str.contains(f"{y}年{q}季度")
+                mask = df['季度'].astype(str).str.contains(f"{year_val}年{q_val}季度")
                 return df[mask]
 
             # Extract specific quarters
-            h_curr = get_quarter_data(df_curr_year, year, curr_q)
+            h_curr = get_quarter_data(df_curr_year, y, q)
             h_prev = get_quarter_data(df_prev_year, prev_year, prev_q)
             
             # Display Logic
             if not h_curr.empty:
-                st.write(f"**{get_text('text_target_quarter', quarter=f'{year} Q{curr_q}')}**")
+                st.write(f"**{get_text('text_target_quarter', quarter=f'{y} Q{q}')}**")
                 st.dataframe(translate_df_columns(h_curr))
                 
                 if not h_prev.empty:
@@ -265,100 +343,297 @@ elif mode == get_text('tab_analysis'):
                 else:
                     st.warning(get_text('warn_no_data_prev', year=prev_year, quarter=f"Q{prev_q}"))
             else:
-                st.warning(get_text('warn_no_data_current', year=year, quarter=f"Q{curr_q}"))
+                st.warning(get_text('warn_no_data_current', year=y, quarter=f"Q{q}"))
                 if not df_curr_year.empty and '季度' in df_curr_year.columns:
                     st.write(get_text('text_quarters', quarters=sorted(df_curr_year['季度'].unique())))
 
-elif mode == get_text('tab_search'):
+# ==========================================
+# Tab 3: Search
+# ==========================================
+with tab_search:
     st.header(get_text('tab_search'))
     
     # Calculate latest available quarter for default
     latest_year, latest_q = get_latest_report_quarter()
     
-    # Year Selection for Search (Default to latest available year)
-    year = st.sidebar.number_input(get_text('label_year'), min_value=2020, max_value=2025, value=latest_year)
-    
-    # Input
+    # Input - Full Width
     stock_input = st.text_area(get_text('label_search_stocks'), height=100, placeholder="例如: 贵州茅台, 600519, 宁德时代")
+    
+    # We use latest_year as the fixed year for search
+    year = latest_year
     
     col1, col2 = st.columns([1, 4])
     
     with col1:
         search_clicked = st.button(get_text('btn_search'), type="primary")
         
+    # --- Search Execution Logic (Smart Resume) ---
     if search_clicked and stock_input:
         inputs = stock_input.split(',')
-        with st.spinner(get_text('msg_fetching')):
-            
-            # Filter for "Stock Type" Funds
-            filter_codes = None
-            if not funds_df.empty and '基金类型' in funds_df.columns:
-                # Logic: Type contains "股票" (Stock), "混合" (Mixed), or "指数" (Index)
-                # This covers most funds that hold significant equity positions.
-                mask = funds_df['基金类型'].astype(str).str.contains('股票|混合|指数', regex=True)
-                allowed_df = funds_df[mask]
-                filter_codes = allowed_df['基金代码'].tolist()
-                
-                st.caption(f"已在 {len(allowed_df)} 只股票/混合/指数型基金范围内进行搜索。")
-            else:
-                st.warning("未检测到基金类型信息，正在全量搜索（可能包含非股票型基金）。请更新基金列表。")
-            
-            results = search_funds_by_stocks(inputs, HOLDINGS_DIR, year, filter_fund_codes=filter_codes)
-            
-            if not results.empty:
-                st.subheader(get_text('header_search_results'))
-                
-                # Merge with fund name if available
-                if not funds_df.empty:
-                    # funds_df has '基金代码' and '基金简称'
-                    results['fund_code'] = results['fund_code'].astype(str)
-                    merged = pd.merge(results, funds_df[['基金代码', '基金简称', '基金类型']], left_on='fund_code', right_on='基金代码', how='left')
-                    merged['fund_name'] = merged['基金简称'].fillna(merged['fund_code'])
-                    
-                    # Reorder columns - Add Type!
-                    display_df = merged[['fund_code', 'fund_name', '基金类型', 'match_count', 'match_degree', 'matched_stocks']]
-                else:
-                    display_df = results
-                
-                # Rename columns for display
-                display_df = display_df.rename(columns={
-                    'fund_code': get_text('label_fund_code'),
-                    'fund_name': "基金名称",
-                    '基金类型': "类型",
-                    'match_count': get_text('col_match_count'),
-                    'match_degree': get_text('col_match_degree'),
-                    'matched_stocks': get_text('col_matched_stocks')
-                })
-                
-                # Color styling
-                st.dataframe(
-                    display_df.style.background_gradient(subset=[get_text('col_match_degree')], cmap="Greens"),
-                    use_container_width=True
-                )
-            else:
-                st.info("未找到持有这些股票的基金，或本地数据为空。请尝试更新数据。")
-
-    # Data Management Section
-    with st.expander("数据管理 / Data Management"):
-        st.write("如果查询结果为空，可能是本地没有最新的持仓数据。您可以批量更新。")
-        st.write(f"当前预估最新财报季度: **{latest_year} Q{latest_q}**")
-        st.write("注意：为了演示性能，默认仅更新 Top 50 热门基金（如有）或列表前 50 个。")
         
-        if st.button(get_text('btn_update_data')):
-            if funds_df.empty:
-                st.error("未找到基金列表，无法更新。")
+        # 1. Filter Scope
+        filter_codes = []
+        if not funds_df.empty and '基金类型' in funds_df.columns:
+            mask = funds_df['基金类型'].astype(str).str.contains('股票|偏股|指数', regex=True)
+            allowed_df = funds_df[mask]
+            filter_codes = allowed_df['基金代码'].tolist()
+        else:
+            if not funds_df.empty:
+                filter_codes = funds_df['基金代码'].tolist()
+
+        if not filter_codes:
+            st.error("没有可供搜索的基金列表。")
+        else:
+            # 2. Smart Resume: Split Cached vs Pending
+            index_data = load_reverse_index()
+            scanned_set = set(index_data.get('scanned_funds', []))
+            target_set = set(filter_codes)
+            
+            cached_codes = list(target_set.intersection(scanned_set))
+            pending_codes = list(target_set.difference(scanned_set))
+            
+            # 3. Retrieve Cached Results Immediately
+            accumulated_results = []
+            if cached_codes:
+                cached_df = query_reverse_index_direct(inputs, cached_codes)
+                if not cached_df.empty:
+                    accumulated_results = cached_df.to_dict('records')
+                    
+                    # Pre-display cached results while scanning continues
+                    results_df = cached_df.copy()
+                    if not funds_df.empty:
+                        results_df['fund_code'] = results_df['fund_code'].astype(str)
+                        merged = pd.merge(results_df, funds_df[['基金代码', '基金简称', '基金类型']], left_on='fund_code', right_on='基金代码', how='left')
+                        merged['fund_name'] = merged['基金简称'].fillna(merged['fund_code'])
+                        if 'quarter' not in merged.columns: merged['quarter'] = 'N/A'
+                        display_df = merged[['fund_code', 'fund_name', '基金类型', 'quarter', 'match_count', 'match_degree', 'matched_stocks']]
+                    else:
+                        display_df = results_df
+                    
+                    # Formatting & Links
+                    display_df = display_df.rename(columns={
+                        'fund_code': get_text('label_fund_code'),
+                        'fund_name': "基金名称",
+                        '基金类型': "类型",
+                        'quarter': "报告期",
+                        'match_count': get_text('col_match_count'),
+                        'match_degree': get_text('col_match_degree'),
+                        'matched_stocks': get_text('col_matched_stocks')
+                    })
+                    code_col = get_text('label_fund_code')
+                    name_col = "基金名称"
+                    display_df[code_col] = display_df[code_col].apply(lambda x: f"http://fund.eastmoney.com/{x}.html")
+                    display_df[name_col] = display_df.apply(lambda r: f"http://fund.eastmoney.com/{r[code_col].split('/')[-1]}#{r[name_col]}", axis=1)
+                    
+                    st.session_state['search_results_df'] = display_df
+                    st.toast(f"✅ 已加载 {len(cached_codes)} 条缓存记录")
+            
+            # 4. Init Search Loop for Pending
+            st.session_state.search_results_accumulated = accumulated_results
+            st.session_state.search_inputs = inputs
+            st.session_state.search_year = year
+            
+            if pending_codes:
+                st.session_state.search_running = True
+                st.session_state.search_paused = False
+                st.session_state.search_queue = pending_codes
+                st.session_state.search_all_codes = filter_codes
+                st.session_state.search_total = len(pending_codes) # Track progress of NEW work
+                st.rerun()
             else:
-                # Select top 50
-                targets = funds_df['基金代码'].head(50).tolist()
+                st.session_state.search_running = False
+                st.success("✅ 搜索完成 (全部命中缓存)")
+                if not accumulated_results:
+                     st.session_state['search_results_df'] = pd.DataFrame()
+                     st.info("未找到匹配结果")
+
+    # --- Running Loop ---
+    if st.session_state.get('search_running'):
+        total = st.session_state.search_total
+        remaining = len(st.session_state.search_queue)
+        done = total - remaining
+        
+        # Progress
+        st.progress(done / total, text=f"正在搜索... {done}/{total} (已找到 {len(st.session_state.search_results_accumulated)} 个匹配)")
+        
+        # Controls
+        c1, c2 = st.columns([1, 4])
+        stop = c1.button("停止 / Stop ⏹️")
+        pause = c2.button("暂停 / Pause ⏸️" if not st.session_state.search_paused else "继续 / Resume ▶️")
+        
+        if stop:
+            st.session_state.search_running = False
+            st.warning("搜索已停止。显示部分结果。")
+            st.rerun()
+            
+        if pause:
+            st.session_state.search_paused = not st.session_state.search_paused
+            st.rerun()
+            
+        # Process Chunk
+        if not st.session_state.search_paused and st.session_state.search_queue:
+            chunk_size = 20
+            chunk = st.session_state.search_queue[:chunk_size]
+            st.session_state.search_queue = st.session_state.search_queue[chunk_size:]
+            
+            try:
+                partial_results = run_async_loop(search_funds_by_stocks_async(
+                    st.session_state.search_inputs,
+                    HOLDINGS_DIR,
+                    st.session_state.search_year,
+                    filter_fund_codes=chunk
+                ))
                 
-                # Use the latest available year
-                update_year = latest_year
+                if not partial_results.empty:
+                    st.session_state.search_results_accumulated.extend(partial_results.to_dict('records'))
+            except Exception as e:
+                st.error(f"Error in chunk: {e}")
                 
-                progress_bar = st.progress(0, text=get_text('msg_updating'))
+            st.rerun()
+            
+        elif not st.session_state.search_queue:
+            # Finished
+            st.session_state.search_running = False
+            st.success("搜索完成！")
+            st.rerun()
+
+    # --- Convert Accumulated to Display DF ---
+    # We do this if 'search_results_df' is empty AND we have accumulated data
+    # OR if we just stopped/finished (detected by running=False but accumulated exists?)
+    # Simplest: If running is False and accumulated has data, update df.
+    # But we want to avoid re-calculating on every unrelated interaction.
+    # We'll rely on the fact that we set search_results_df = DataFrame() on init.
+    # So if accumulated is present and df is empty (and not running), we convert.
+    
+    if (not st.session_state.get('search_running') 
+        and st.session_state.get('search_results_accumulated') 
+        and (st.session_state.get('search_results_df') is None or st.session_state.get('search_results_df').empty)):
+        
+        results_df = pd.DataFrame(st.session_state.search_results_accumulated)
+        if not results_df.empty:
+            # Deduplicate by fund_code
+            results_df.drop_duplicates(subset=['fund_code'], inplace=True)
+            
+            # Process for display
+            if not funds_df.empty:
+                results_df['fund_code'] = results_df['fund_code'].astype(str)
+                merged = pd.merge(results_df, funds_df[['基金代码', '基金简称', '基金类型']], left_on='fund_code', right_on='基金代码', how='left')
+                merged['fund_name'] = merged['基金简称'].fillna(merged['fund_code'])
+                if 'quarter' not in merged.columns: merged['quarter'] = 'N/A'
+                display_df = merged[['fund_code', 'fund_name', '基金类型', 'quarter', 'match_count', 'match_degree', 'matched_stocks']]
+            else:
+                display_df = results_df
+            
+            # Formatting
+            display_df = display_df.rename(columns={
+                'fund_code': get_text('label_fund_code'),
+                'fund_name': "基金名称",
+                '基金类型': "类型",
+                'quarter': "报告期",
+                'match_count': get_text('col_match_count'),
+                'match_degree': get_text('col_match_degree'),
+                'matched_stocks': get_text('col_matched_stocks')
+            })
+            
+            # Links
+            code_col = get_text('label_fund_code')
+            name_col = "基金名称"
+            
+            # Code column
+            display_df[code_col] = display_df[code_col].apply(lambda x: f"http://fund.eastmoney.com/{x}.html")
+            # Name column with #Name hack
+            display_df[name_col] = display_df.apply(lambda r: f"http://fund.eastmoney.com/{r[code_col].split('/')[-1]}#{r[name_col]}", axis=1)
+            
+            st.session_state['search_results_df'] = display_df
+            st.session_state['search_year_cached'] = st.session_state.search_year
+            
+            # Clear accumulated to prevent re-processing? No, keep for reference? 
+            # Or just set a flag "processed". 
+            # Better: The check `st.session_state.get('search_results_df').empty` handles it.
+            # If we populated df, it's not empty. So we won't re-enter.
+
+
+
+    # Render Results from Session State
+    if 'search_results_df' in st.session_state and not st.session_state['search_results_df'].empty:
+        display_df = st.session_state['search_results_df']
+        cached_year = st.session_state.get('search_year_cached', year) # Fallback to current input year if missing
+        
+        st.subheader(get_text('header_search_results'))
+        
+        # --- Pagination for Search Results ---
+        c_p1, c_p2, c_p3 = st.columns([1, 1, 3])
+        with c_p1:
+            sp_size = st.selectbox("每页显示", [10, 20, 50], key="search_page_size")
+        
+        s_total = len(display_df)
+        s_pages = (s_total // sp_size) + (1 if s_total % sp_size > 0 else 0)
+        
+        with c_p2:
+            sp_num = st.number_input("页码", min_value=1, max_value=max(1, s_pages), value=1, key="search_page_num")
+            
+        s_start = (sp_num - 1) * sp_size
+        s_end = min(s_start + sp_size, s_total)
+        
+        st.caption(f"显示第 {s_start + 1} 到 {s_end} 条，共 {s_total} 条")
+        
+        page_df = display_df.iloc[s_start:s_end]
+
+        # Interactive Dataframe
+        code_col = get_text('label_fund_code')
+        name_col = "基金名称"
+        
+        event = st.dataframe(
+            page_df.style.background_gradient(subset=[get_text('col_match_degree')], cmap="Greens"),
+            use_container_width=True,
+            on_select="rerun",
+            selection_mode="single-row",
+            key="search_result_table",
+            column_config={
+                code_col: st.column_config.LinkColumn(
+                    code_col,
+                    display_text=r"http://fund\.eastmoney\.com/(\d+)\.html"
+                ),
+                name_col: st.column_config.LinkColumn(
+                    name_col,
+                    display_text=r".*#(.*)"
+                )
+            }
+        )
+        
+        # --- Detail View on Selection ---
+        if len(event.selection.rows) > 0:
+            selected_idx = event.selection.rows[0]
+            # sel_fund_code is now a URL in the dataframe
+            sel_url = page_df.iloc[selected_idx][code_col]
+            # Extract code: http://fund.eastmoney.com/000001.html -> 000001
+            try:
+                sel_fund_code = sel_url.split('/')[-1].replace('.html', '')
+            except:
+                sel_fund_code = "" # Fallback
+            
+            if sel_fund_code:
+                st.divider()
+                st.subheader(f"🔍 基金详情: {sel_fund_code}")
                 
-                def update_progress(i, total, msg):
-                    progress_bar.progress((i + 1) / total, text=f"{msg} ({i+1}/{total})")
-                
-                batch_fetch_holdings(targets, update_year, progress_callback=update_progress)
-                
-                st.success(get_text('msg_update_complete', success=len(targets), total=len(targets)))
+                with st.spinner("正在加载详情..."):
+                    # 1. Info
+                    info = fetch_fund_info(sel_fund_code)
+                    st.write("**基本信息**")
+                    st.dataframe(info, use_container_width=True)
+                    
+                    # 2. NAV Chart
+                    nav_df = fetch_fund_nav(sel_fund_code)
+                    if not nav_df.empty:
+                        nav_df['净值日期'] = pd.to_datetime(nav_df['净值日期'])
+                        nav_df = nav_df.sort_values('净值日期')
+                        fig = px.line(nav_df, x='净值日期', y='单位净值', title=f"{sel_fund_code} 历史净值走势")
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    # 3. Holdings
+                    st.write(f"**持仓明细 ({cached_year}年)**")
+                    holdings = fetch_fund_holdings(sel_fund_code, cached_year)
+                    if not holdings.empty:
+                        st.dataframe(translate_df_columns(holdings), use_container_width=True)
+                    else:
+                        st.warning("暂无持仓数据")

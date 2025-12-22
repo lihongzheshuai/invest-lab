@@ -69,28 +69,53 @@ def init_sources_list():
     df.to_csv(SOURCES_FILE, index=False, encoding='utf-8-sig')
     print(f"Initialized data sources list at {SOURCES_FILE}")
 
-def get_active_source(task_type: str) -> dict:
+def load_sources():
+    """Load data sources configuration."""
+    if not os.path.exists(SOURCES_FILE):
+        init_sources_list()
+        
+    try:
+        return pd.read_csv(SOURCES_FILE, encoding='utf-8-sig')
+    except Exception as e:
+        print(f"Error loading data sources: {e}")
+        return pd.DataFrame()
+
+def save_sources(df):
+    """Save data sources configuration."""
+    try:
+        df.to_csv(SOURCES_FILE, index=False, encoding='utf-8-sig')
+    except Exception as e:
+        print(f"Error saving data sources: {e}")
+
+def get_active_source(data_type: str):
     """
-    Returns the best available data source for a given task type (e.g., 'nav', 'holdings').
-    Returns None if no valid source is found.
+    Get the currently active source for a specific data type ('nav' or 'holdings').
+    Returns a dictionary or None.
+    Prioritizes sources with 'valid' status and lower priority number (1 is highest).
     """
     if not os.path.exists(SOURCES_FILE):
         init_sources_list()
-    
-    try:
-        df = pd.read_csv(SOURCES_FILE)
-        # Filter by type and valid status, sort by priority (1 is highest)
-        candidates = df[
-            (df['type'] == task_type) & 
-            (df['status'] == 'valid')
-        ].sort_values('priority')
         
-        if not candidates.empty:
-            return candidates.iloc[0].to_dict()
-        return None
+    try:
+        df = pd.read_csv(SOURCES_FILE, encoding='utf-8-sig')
+            
+        # Filter by type and status='valid'
+        # Check if columns exist to be safe
+        if 'status' not in df.columns or 'type' not in df.columns:
+            return None
+            
+        active = df[(df['type'] == data_type) & (df['status'] == 'valid')]
+        
+        if not active.empty:
+            # Sort by priority (if exists)
+            if 'priority' in df.columns:
+                active = active.sort_values(by='priority', ascending=True)
+            return active.iloc[0].to_dict()
+            
     except Exception as e:
-        print(f"Error reading data sources: {e}")
-        return None
+        print(f"Error getting active source: {e}")
+        
+    return None
 
 def update_source_status(source_id: str, is_success: bool):
     """
@@ -100,21 +125,24 @@ def update_source_status(source_id: str, is_success: bool):
         return
 
     try:
-        df = pd.read_csv(SOURCES_FILE)
+        # Since I can't easily import _read_csv_robust from data_manager (circular?), use robust logic inline
+        # Actually, let's just use pd.read_csv with try/except
+        df = pd.read_csv(SOURCES_FILE, encoding='utf-8-sig')
+
         if source_id in df['id'].values:
             idx = df[df['id'] == source_id].index[0]
             
-            # Logic: If success, mark valid. 
-            # If fail, we could mark invalid immediately, or implement a counter.
-            # For this requirement, we update status based on validity.
-            new_status = 'valid' if is_success else 'invalid'
+            if is_success:
+                df.at[idx, 'status'] = 'valid'
             
-            df.at[idx, 'status'] = new_status
+            # If failed, we DO NOT mark invalid to prevent permanent lockout on transient errors.
+            # We just log it.
+            
             df.at[idx, 'last_updated'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
             df.to_csv(SOURCES_FILE, index=False, encoding='utf-8-sig')
             if not is_success:
-                print(f"Warning: Data source {source_id} marked as invalid.")
+                print(f"Warning: Fetch failed for {source_id}, but status kept valid for retries.")
     except Exception as e:
         print(f"Error updating source status: {e}")
 

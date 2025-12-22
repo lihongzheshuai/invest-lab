@@ -8,6 +8,12 @@ NAV_DIR = os.path.join(DATA_DIR, 'nav')
 HOLDINGS_DIR = os.path.join(DATA_DIR, 'holdings')
 FUNDS_LIST_PATH = os.path.join(DATA_DIR, 'funds.csv')
 
+def _read_csv_robust(file_path, **kwargs):
+    """
+    Helper to read CSV with strict UTF-8-SIG encoding.
+    """
+    return pd.read_csv(file_path, encoding='utf-8-sig', **kwargs)
+
 def ensure_data_dir():
     if not os.path.exists(DATA_DIR):
         os.makedirs(DATA_DIR)
@@ -44,10 +50,14 @@ def fetch_and_save_fund_list():
         # Check for existing file to preserve status
         if os.path.exists(FUNDS_LIST_PATH):
             print(f"Updating existing fund list at {FUNDS_LIST_PATH}...")
-            existing_df = pd.read_csv(FUNDS_LIST_PATH, dtype={'基金代码': str})
+            try:
+                existing_df = _read_csv_robust(FUNDS_LIST_PATH, dtype={'基金代码': str})
+            except Exception as e:
+                print(f"Failed to read existing file, starting fresh: {e}")
+                existing_df = pd.DataFrame()
             
             # Columns to preserve
-            if 'status' in existing_df.columns:
+            if not existing_df.empty and 'status' in existing_df.columns:
                 # Merge logic: Left join new list with existing status
                 # We want the latest basic info (new_df) but keep old status
                 status_df = existing_df[['基金代码', 'status', 'last_updated']].dropna(subset=['status'])
@@ -88,7 +98,7 @@ def update_fund_status(fund_code: str, is_valid: bool):
         return
 
     try:
-        df = pd.read_csv(FUNDS_LIST_PATH, dtype={'基金代码': str})
+        df = _read_csv_robust(FUNDS_LIST_PATH, dtype={'基金代码': str})
         
         if fund_code not in df['基金代码'].values:
             print(f"Fund code {fund_code} not found in the list.")
@@ -118,9 +128,11 @@ def load_fund_nav_from_cache(fund_code: str) -> pd.DataFrame:
     """Loads fund NAV data from cache."""
     file_path = os.path.join(NAV_DIR, f'{fund_code}.csv')
     if os.path.exists(file_path):
-        print(f"Loading NAV for {fund_code} from cache: {file_path}")
-        df = pd.read_csv(file_path)
-        return df
+        # print(f"Loading NAV for {fund_code} from cache: {file_path}")
+        try:
+            return _read_csv_robust(file_path)
+        except Exception as e:
+            print(f"Error reading NAV cache for {fund_code}: {e}")
     return pd.DataFrame()
 
 def save_fund_holdings_to_cache(fund_code: str, year: int, holdings_df: pd.DataFrame):
@@ -134,9 +146,11 @@ def load_fund_holdings_from_cache(fund_code: str, year: int) -> pd.DataFrame:
     """Loads fund holdings data from cache."""
     file_path = os.path.join(HOLDINGS_DIR, f'{fund_code}_{year}.csv')
     if os.path.exists(file_path):
-        print(f"Loading holdings for {fund_code} in {year} from cache: {file_path}")
-        df = pd.read_csv(file_path)
-        return df
+        # print(f"Loading holdings for {fund_code} in {year} from cache: {file_path}")
+        try:
+            return _read_csv_robust(file_path)
+        except Exception as e:
+            print(f"Error reading holdings cache for {fund_code}: {e}")
     return pd.DataFrame()
 
 def get_nav_last_date(fund_code: str) -> str:
@@ -152,7 +166,7 @@ def get_nav_last_date(fund_code: str) -> str:
         # Read only the '净值日期' column to save memory/time? 
         # But pandas reads full file mostly.
         # Use header=0 and just read the relevant column if possible, but reading full is safe.
-        df = pd.read_csv(file_path)
+        df = _read_csv_robust(file_path)
         if df.empty or '净值日期' not in df.columns:
             return None
             

@@ -1,5 +1,5 @@
 ﻿id,name,chinese_name,url,handler,type,status,priority,last_updated
-akshare_eastmoney_nav,EastMoney NAV (Open Fund),东方财富-开放式基金-历史净值,http://fund.eastmoney.com,akshare_nav,nav,invalid,1,2025-12-16 17:09:31
-akshare_eastmoney_holdings,EastMoney Holdings,东方财富-开放式基金-持仓明细,http://fund.eastmoney.com,akshare_holdings,holdings,valid,1,2025-12-19 08:58:02
+akshare_eastmoney_nav,EastMoney NAV (Open Fund),东方财富-开放式基金-历史净值,http://fund.eastmoney.com,akshare_nav,nav,valid,1,2025-12-22 21:06:45
+akshare_eastmoney_holdings,EastMoney Holdings,东方财富-开放式基金-持仓明细,http://fund.eastmoney.com,akshare_holdings,holdings,invalid,1,2025-12-21 21:07:36
 akshare_eastmoney_etf_nav,EastMoney ETF NAV,东方财富-ETF基金-历史净值,http://fund.eastmoney.com,akshare_etf_nav,nav,valid,2,2025-12-15 13:56:33
 akshare_eastmoney_money_nav,EastMoney Money Fund NAV,东方财富-理财型基金-历史净值,http://fund.eastmoney.com,akshare_money_nav,nav,valid,2,2025-12-15 13:56:33

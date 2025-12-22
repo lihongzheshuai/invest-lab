@@ -1,4 +1,28 @@
 from datetime import datetime, date
+import asyncio
+import concurrent.futures
+
+def run_async_loop(coro):
+    """
+    Safely run an async coroutine from a synchronous context.
+    Handles cases where an event loop might already be running.
+    """
+    try:
+        # Check if an event loop is already running in this thread
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        # If a loop is running, we cannot use asyncio.run() or loop.run_until_complete() directly.
+        # We execute the coroutine in a separate thread to avoid blocking the existing loop
+        # or triggering "RuntimeError: asyncio.run() cannot be called from a running event loop".
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(lambda: asyncio.run(coro))
+            return future.result()
+    else:
+        # No loop running, safe to use asyncio.run()
+        return asyncio.run(coro)
 
 def get_latest_report_quarter(current_date: date = None) -> tuple[int, int]:
     """

@@ -2,7 +2,7 @@
 TRANS = {
     'zh_CN': {
         # UI Structure
-        'app_title': "基金投资实验室 (A股)",
+        'app_title': "基金投资实验室",
         'sidebar_header': "配置",
         'label_fund_code': "基金代码",
         'label_year': "分析年份",
