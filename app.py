@@ -366,23 +366,12 @@ with tab_search:
         
         if 'limit_up_df' in st.session_state and not st.session_state['limit_up_df'].empty:
              st.caption("👇 勾选下方股票，可一键复制或填入搜索框 / Select stocks below to copy or auto-fill:")
+             st.caption("💡 **提示**: 点击表头第一列复选框可**全选**；点击列名可**排序** (排序状态不会因选择而重置)。")
              
              # Access Session State Data
-             df_display = st.session_state['limit_up_df']
+             # Use a copy for display to add URL columns without polluting the cache
+             df_display = st.session_state['limit_up_df'].copy()
              
-             # Initialize 'Select' column if not present
-             if '选择' not in df_display.columns:
-                 df_display.insert(0, '选择', False)
-             
-             # --- Global Selection Controls ---
-             c_sel1, c_sel2, c_dummy = st.columns([1, 1, 4])
-             if c_sel1.button("✅ 全选 / Select All"):
-                 df_display['选择'] = True
-                 st.rerun()
-             if c_sel2.button("❎ 全不选 / Deselect All"):
-                 df_display['选择'] = False
-                 st.rerun()
-
              # --- Prepare Display Data (Links etc) ---
              def get_em_url(code):
                  if str(code).startswith(('6', '9')): prefix = "sh"
@@ -399,18 +388,20 @@ with tab_search:
              if '最新价' in df_display.columns:
                  df_display['最新价'] = pd.to_numeric(df_display['最新价'], errors='coerce')
              
-             # Columns to show
-             cols = ['选择', '日期', '代码_URL', '名称_URL', '最新价', '换手率', '最后封板时间', '炸板次数', '所属行业', '连板数']
+             # Columns to show (No '选择' column needed)
+             cols = ['日期', '代码_URL', '名称_URL', '最新价', '换手率', '最后封板时间', '炸板次数', '所属行业', '连板数']
              # Filter cols just in case
              cols_to_show = [c for c in cols if c in df_display.columns]
 
-             # Render Editor
-             edited_df = st.data_editor(
+             # Render Dataframe with native selection
+             event = st.dataframe(
                  df_display[cols_to_show],
                  hide_index=True,
                  use_container_width=True,
+                 on_select="rerun",
+                 selection_mode="multi-row",
+                 key="limit_up_selector",
                  column_config={
-                     "选择": st.column_config.CheckboxColumn("选择", width="small"),
                      "代码_URL": st.column_config.LinkColumn(
                          "代码", display_text=r"http://quote\.eastmoney\.com/[a-z]{2}(\d+)\.html"
                      ),
@@ -420,19 +411,15 @@ with tab_search:
                      "最后封板时间": st.column_config.TextColumn("最后封板时间"),
                      "最新价": st.column_config.NumberColumn("最新价", format="%.2f"),
                      "换手率": st.column_config.NumberColumn("换手率", format="%.2f%%"),
-                 },
-                 key="limit_up_editor"
+                 }
              )
              
-             # Sync selection back to session state to persist across reruns
-             st.session_state['limit_up_df']['选择'] = edited_df['选择']
-             
              # Process Selection
-             selected_rows = edited_df[edited_df['选择']]
-             if not selected_rows.empty:
-                 # Use index to retrieve Name from original df (which has '名称' column)
-                 full_df = st.session_state['limit_up_df']
-                 selected_names = full_df.loc[selected_rows.index, '名称'].tolist()
+             selected_rows = event.selection.rows
+             if selected_rows:
+                 # Use index to retrieve Name from display df
+                 # Streamlit returns row indices relative to the source dataframe
+                 selected_names = df_display.iloc[selected_rows]['名称'].tolist()
                  names_str = ",".join(selected_names)
                  
                  st.caption(f"✅ 已选 {len(selected_names)} 只股票 / Selected:")
