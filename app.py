@@ -10,6 +10,7 @@ from src.analyzer import analyze_position_changes, search_funds_by_stocks, searc
 from src.translations import get_text, translate_df_columns, translate_change_types
 from src.data_manager import FUNDS_LIST_PATH, HOLDINGS_DIR, fetch_and_save_fund_list
 from src.utils import get_latest_report_quarter, run_async_loop
+from src.stocks.stocks import get_limit_up_model
 
 st.set_page_config(page_title=get_text('app_title'), layout="wide")
 
@@ -352,12 +353,54 @@ with tab_analysis:
 # ==========================================
 with tab_search:
     st.header(get_text('tab_search'))
+
+    # --- Limit Up Stocks Feature (Added) ---
+    with st.expander("🔥 每日涨停股池 (辅助填入) / Daily Limit-Up Stocks Helper", expanded=False):
+        if st.button("获取/刷新 今日涨停股 / Fetch Limit-Up Stocks"):
+             with st.spinner("正在获取涨停数据... / Fetching data..."):
+                 try:
+                     df_limit = get_limit_up_model()
+                     st.session_state['limit_up_df'] = df_limit
+                 except Exception as e:
+                     st.error(f"获取失败 / Failed: {e}")
+        
+        if 'limit_up_df' in st.session_state and not st.session_state['limit_up_df'].empty:
+             st.caption("👇 勾选下方股票，可一键复制或填入搜索框 / Select stocks below to copy or auto-fill:")
+             limit_df = st.session_state['limit_up_df']
+             
+             event_limit = st.dataframe(
+                 limit_df,
+                 use_container_width=True,
+                 on_select="rerun",
+                 selection_mode="multi-row",
+                 key="limit_up_selector"
+             )
+             
+             selected_rows = event_limit.selection.rows
+             if selected_rows:
+                 # Get names
+                 selected_names = limit_df.iloc[selected_rows]['名称'].tolist()
+                 names_str = ",".join(selected_names)
+                 
+                 st.caption("✅ 已选股票 / Selected Stocks:")
+                 st.code(names_str, language="text")
+                 
+                 if st.button("⬇️ 一键填入搜索框 / Fill Search Box"):
+                     st.session_state.search_stocks_input = names_str
+                     st.rerun()
     
     # Calculate latest available quarter for default
     latest_year, latest_q = get_latest_report_quarter()
     
     # Input - Full Width
-    stock_input = st.text_area(get_text('label_search_stocks'), height=100, placeholder="例如: 贵州茅台, 600519, 宁德时代")
+    # Ensure key is initialized if not present to avoid errors if accessed before widget creation? 
+    # Streamlit handles initialization if key is in widget.
+    stock_input = st.text_area(
+        get_text('label_search_stocks'), 
+        height=100, 
+        placeholder="例如: 贵州茅台, 600519, 宁德时代", 
+        key="search_stocks_input"
+    )
     
     # We use latest_year as the fixed year for search
     year = latest_year
