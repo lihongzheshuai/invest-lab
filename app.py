@@ -366,20 +366,57 @@ with tab_search:
         
         if 'limit_up_df' in st.session_state and not st.session_state['limit_up_df'].empty:
              st.caption("👇 勾选下方股票，可一键复制或填入搜索框 / Select stocks below to copy or auto-fill:")
-             limit_df = st.session_state['limit_up_df']
              
+             # Process Data for Display with Links
+             limit_df_raw = st.session_state['limit_up_df']
+             display_df = limit_df_raw.copy()
+             
+             def get_em_url(code):
+                 # Simple heuristic for EastMoney Quote URL
+                 # 6xx -> sh, 0xx/3xx -> sz, 8xx/4xx -> bj
+                 if str(code).startswith(('6', '9')): prefix = "sh"
+                 elif str(code).startswith(('0', '3')): prefix = "sz"
+                 elif str(code).startswith(('8', '4')): prefix = "bj"
+                 else: prefix = "sz"
+                 return f"http://quote.eastmoney.com/{prefix}{code}.html"
+
+             # Create Link Columns
+             display_df['代码_URL'] = display_df['代码'].apply(get_em_url)
+             display_df['名称_URL'] = display_df.apply(lambda x: f"{x['代码_URL']}#{x['名称']}", axis=1)
+             
+             # Ensure numeric types for formatting
+             if '最新价' in display_df.columns:
+                 display_df['最新价'] = pd.to_numeric(display_df['最新价'], errors='coerce')
+             
+             # Select Columns to Show
+             cols_to_show = ['日期', '代码_URL', '名称_URL', '最新价', '换手率', '最后封板时间', '炸板次数', '所属行业', '连板数']
+             # Filter only existing columns just in case
+             cols_to_show = [c for c in cols_to_show if c in display_df.columns]
+
              event_limit = st.dataframe(
-                 limit_df,
+                 display_df[cols_to_show],
                  use_container_width=True,
                  on_select="rerun",
                  selection_mode="multi-row",
-                 key="limit_up_selector"
+                 key="limit_up_selector",
+                 column_config={
+                     "代码_URL": st.column_config.LinkColumn(
+                         "代码", display_text=r"http://quote\.eastmoney\.com/[a-z]{2}(\d+)\.html"
+                     ),
+                     "名称_URL": st.column_config.LinkColumn(
+                         "名称", display_text=r".*#(.*)"
+                     ),
+                     "最后封板时间": st.column_config.TextColumn("最后封板时间"),
+                     "最新价": st.column_config.NumberColumn("最新价", format="%.2f"),
+                     "换手率": st.column_config.NumberColumn("换手率", format="%.2f%%"),
+                 }
              )
              
              selected_rows = event_limit.selection.rows
              if selected_rows:
-                 # Get names
-                 selected_names = limit_df.iloc[selected_rows]['名称'].tolist()
+                 # Get names from RAW dataframe using the same index
+                 # Assuming index alignment is preserved
+                 selected_names = limit_df_raw.iloc[selected_rows]['名称'].tolist()
                  names_str = ",".join(selected_names)
                  
                  st.caption("✅ 已选股票 / Selected Stocks:")

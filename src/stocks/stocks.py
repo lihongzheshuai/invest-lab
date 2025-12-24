@@ -42,7 +42,7 @@ def get_limit_up_model(date: str = None):
 
     # 2. 核心筛选逻辑设定
     # 检查必要列是否存在
-    required_columns = ['炸板次数', '换手率', '最后封板时间', '代码', '名称', '所属行业', '连板数']
+    required_columns = ['炸板次数', '换手率', '最后封板时间', '代码', '名称', '所属行业', '连板数', '最新价']
     missing_cols = [col for col in required_columns if col not in df.columns]
     if missing_cols:
         print(f"数据源缺失必要列: {missing_cols}")
@@ -73,8 +73,15 @@ def get_limit_up_model(date: str = None):
     if result_df.empty:
         return pd.DataFrame()
 
-    # 3. 结果排序：按换手率递减排序，查看分歧最充分的股票
+    # 3. 结果排序：按换手率递减排序
     result = result_df.sort_values(by='换手率', ascending=False).copy()
+    
+    # 格式化最后封板时间为 HH:MM:SS
+    def format_time(t_str):
+        s = str(t_str).replace(':', '').zfill(6)
+        return f"{s[:2]}:{s[2:4]}:{s[4:]}"
+    
+    result['最后封板时间'] = result['最后封板时间'].apply(format_time)
     
     # 添加日期列以便前端展示
     if used_date:
