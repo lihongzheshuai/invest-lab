@@ -367,39 +367,50 @@ with tab_search:
         if 'limit_up_df' in st.session_state and not st.session_state['limit_up_df'].empty:
              st.caption("👇 勾选下方股票，可一键复制或填入搜索框 / Select stocks below to copy or auto-fill:")
              
-             # Process Data for Display with Links
-             limit_df_raw = st.session_state['limit_up_df']
-             display_df = limit_df_raw.copy()
+             # Access Session State Data
+             df_display = st.session_state['limit_up_df']
              
+             # Initialize 'Select' column if not present
+             if '选择' not in df_display.columns:
+                 df_display.insert(0, '选择', False)
+             
+             # --- Global Selection Controls ---
+             c_sel1, c_sel2, c_dummy = st.columns([1, 1, 4])
+             if c_sel1.button("✅ 全选 / Select All"):
+                 df_display['选择'] = True
+                 st.rerun()
+             if c_sel2.button("❎ 全不选 / Deselect All"):
+                 df_display['选择'] = False
+                 st.rerun()
+
+             # --- Prepare Display Data (Links etc) ---
              def get_em_url(code):
-                 # Simple heuristic for EastMoney Quote URL
-                 # 6xx -> sh, 0xx/3xx -> sz, 8xx/4xx -> bj
                  if str(code).startswith(('6', '9')): prefix = "sh"
                  elif str(code).startswith(('0', '3')): prefix = "sz"
                  elif str(code).startswith(('8', '4')): prefix = "bj"
                  else: prefix = "sz"
                  return f"http://quote.eastmoney.com/{prefix}{code}.html"
 
-             # Create Link Columns
-             display_df['代码_URL'] = display_df['代码'].apply(get_em_url)
-             display_df['名称_URL'] = display_df.apply(lambda x: f"{x['代码_URL']}#{x['名称']}", axis=1)
+             # Update URL columns
+             df_display['代码_URL'] = df_display['代码'].apply(get_em_url)
+             df_display['名称_URL'] = df_display.apply(lambda x: f"{x['代码_URL']}#{x['名称']}", axis=1)
              
-             # Ensure numeric types for formatting
-             if '最新价' in display_df.columns:
-                 display_df['最新价'] = pd.to_numeric(display_df['最新价'], errors='coerce')
+             # Ensure numeric types
+             if '最新价' in df_display.columns:
+                 df_display['最新价'] = pd.to_numeric(df_display['最新价'], errors='coerce')
              
-             # Select Columns to Show
-             cols_to_show = ['日期', '代码_URL', '名称_URL', '最新价', '换手率', '最后封板时间', '炸板次数', '所属行业', '连板数']
-             # Filter only existing columns just in case
-             cols_to_show = [c for c in cols_to_show if c in display_df.columns]
+             # Columns to show
+             cols = ['选择', '日期', '代码_URL', '名称_URL', '最新价', '换手率', '最后封板时间', '炸板次数', '所属行业', '连板数']
+             # Filter cols just in case
+             cols_to_show = [c for c in cols if c in df_display.columns]
 
-             event_limit = st.dataframe(
-                 display_df[cols_to_show],
+             # Render Editor
+             edited_df = st.data_editor(
+                 df_display[cols_to_show],
+                 hide_index=True,
                  use_container_width=True,
-                 on_select="rerun",
-                 selection_mode="multi-row",
-                 key="limit_up_selector",
                  column_config={
+                     "选择": st.column_config.CheckboxColumn("选择", width="small"),
                      "代码_URL": st.column_config.LinkColumn(
                          "代码", display_text=r"http://quote\.eastmoney\.com/[a-z]{2}(\d+)\.html"
                      ),
@@ -409,17 +420,22 @@ with tab_search:
                      "最后封板时间": st.column_config.TextColumn("最后封板时间"),
                      "最新价": st.column_config.NumberColumn("最新价", format="%.2f"),
                      "换手率": st.column_config.NumberColumn("换手率", format="%.2f%%"),
-                 }
+                 },
+                 key="limit_up_editor"
              )
              
-             selected_rows = event_limit.selection.rows
-             if selected_rows:
-                 # Get names from RAW dataframe using the same index
-                 # Assuming index alignment is preserved
-                 selected_names = limit_df_raw.iloc[selected_rows]['名称'].tolist()
+             # Sync selection back to session state to persist across reruns
+             st.session_state['limit_up_df']['选择'] = edited_df['选择']
+             
+             # Process Selection
+             selected_rows = edited_df[edited_df['选择']]
+             if not selected_rows.empty:
+                 # Use index to retrieve Name from original df (which has '名称' column)
+                 full_df = st.session_state['limit_up_df']
+                 selected_names = full_df.loc[selected_rows.index, '名称'].tolist()
                  names_str = ",".join(selected_names)
                  
-                 st.caption("✅ 已选股票 / Selected Stocks:")
+                 st.caption(f"✅ 已选 {len(selected_names)} 只股票 / Selected:")
                  st.code(names_str, language="text")
                  
                  if st.button("⬇️ 一键填入搜索框 / Fill Search Box"):
