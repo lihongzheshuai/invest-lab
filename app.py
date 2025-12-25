@@ -369,9 +369,22 @@ with tab_search:
              st.caption("💡 **提示**: 点击表头第一列复选框可**全选**；点击列名可**排序** (排序状态不会因选择而重置)。")
              
              # Access Session State Data
-             # Use a copy for display to add URL columns without polluting the cache
-             df_display = st.session_state['limit_up_df'].copy()
+             limit_df_raw = st.session_state['limit_up_df']
+             df_display = limit_df_raw.copy()
              
+             # --- Filter by Block (Concept) ---
+             # Rename '所属行业' to '所属板块' for display if it exists
+             if '所属行业' in df_display.columns:
+                 df_display = df_display.rename(columns={'所属行业': '所属板块'})
+             
+             if '所属板块' in df_display.columns:
+                 all_blocks = sorted(df_display['所属板块'].astype(str).unique().tolist())
+                 # E-commerce style filter buttons
+                 selected_blocks = st.pills("🔍 按板块筛选 (支持多选) / Filter by Block:", all_blocks, selection_mode="multi")
+                 
+                 if selected_blocks:
+                     df_display = df_display[df_display['所属板块'].isin(selected_blocks)]
+
              # --- Prepare Display Data (Links etc) ---
              def get_em_url(code):
                  if str(code).startswith(('6', '9')): prefix = "sh"
@@ -388,8 +401,9 @@ with tab_search:
              if '最新价' in df_display.columns:
                  df_display['最新价'] = pd.to_numeric(df_display['最新价'], errors='coerce')
              
-             # Columns to show (No '选择' column needed)
-             cols = ['日期', '代码_URL', '名称_URL', '最新价', '换手率', '最后封板时间', '炸板次数', '所属行业', '连板数']
+             # Columns to show
+             # Use '所属板块' instead of '所属行业'
+             cols = ['日期', '代码_URL', '名称_URL', '所属板块', '最新价', '换手率', '最后封板时间', '炸板次数', '连板数']
              # Filter cols just in case
              cols_to_show = [c for c in cols if c in df_display.columns]
 
@@ -418,7 +432,7 @@ with tab_search:
              selected_rows = event.selection.rows
              if selected_rows:
                  # Use index to retrieve Name from display df
-                 # Streamlit returns row indices relative to the source dataframe
+                 # Streamlit returns row indices relative to the source dataframe (df_display)
                  selected_names = df_display.iloc[selected_rows]['名称'].tolist()
                  names_str = ",".join(selected_names)
                  
