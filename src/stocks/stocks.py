@@ -1,6 +1,35 @@
 import akshare as ak
 import pandas as pd
 from datetime import datetime, timedelta
+import requests
+import concurrent.futures
+
+def get_stock_concepts_eastmoney(symbol):
+    """
+    Fetch concepts for a single stock from EastMoney.
+    """
+    try:
+        # Determine prefix
+        if str(symbol).startswith(('6', '9')): prefix = "SH"
+        elif str(symbol).startswith(('0', '3')): prefix = "SZ"
+        elif str(symbol).startswith(('8', '4')): prefix = "BJ"
+        else: prefix = "SZ"
+        
+        url = "http://emweb.securities.eastmoney.com/PC_HSF10/CoreConception/PageAjax"
+        params = {"code": f"{prefix}{symbol}"}
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        }
+        
+        r = requests.get(url, params=params, headers=headers, timeout=2)
+        data = r.json()
+        
+        if 'ssbk' in data and data['ssbk']:
+            concepts = [item['BOARD_NAME'] for item in data['ssbk']]
+            return ";".join(concepts)
+    except Exception:
+        return ""
+    return ""
 
 def get_limit_up_model(date: str = None):
     # 1. 获取数据：自动寻找最近一个有数据的交易日
@@ -22,9 +51,6 @@ def get_limit_up_model(date: str = None):
         for i in range(10):
             check_date = curr_time - timedelta(days=i)
             date_str = check_date.strftime("%Y%m%d")
-            
-            # 只有在尝试过去日期时才打印详细日志，避免刷屏
-            # print(f"尝试获取 {date_str} 数据...") 
             
             try:
                 temp_df = ak.stock_zt_pool_em(date=date_str)
@@ -48,8 +74,26 @@ def get_limit_up_model(date: str = None):
         print(f"数据源缺失必要列: {missing_cols}")
         return pd.DataFrame()
 
-    # 复制一份数据进行处理，避免SettingWithCopyWarning
+    # 复制一份数据进行处理
     result = df.copy()
+    
+    # --- 新增：并发获取个股概念 ---
+    print("正在抓取个股概念数据 (多线程)...")
+    result['所属概念'] = "" # Initialize
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+        future_to_index = {
+            executor.submit(get_stock_concepts_eastmoney, row['代码']): index 
+            for index, row in result.iterrows()
+        }
+        
+        for future in concurrent.futures.as_completed(future_to_index):
+            index = future_to_index[future]
+            try:
+                concepts = future.result()
+                result.at[index, '所属概念'] = concepts
+            except Exception:
+                pass
+    # ---------------------------
 
     # 格式化最后封板时间为 HH:MM:SS
     def format_time(t_str):
@@ -70,8 +114,8 @@ def get_limit_up_model(date: str = None):
     if used_date:
         result['日期'] = used_date
 
-    # 确保返回列包含日期
-    final_cols = ['日期'] + required_columns
+    # 确保返回列包含日期和概念
+    final_cols = ['日期'] + required_columns + ['所属概念']
     return result[final_cols]
 
 # 运行模型

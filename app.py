@@ -372,20 +372,43 @@ with tab_search:
              limit_df_raw = st.session_state['limit_up_df']
              df_display = limit_df_raw.copy()
              
-             # --- Filter by Block (Concept) ---
-             # Rename '所属行业' to '所属板块' for display if it exists
+             # Rename '所属行业' to '所属板块'
              if '所属行业' in df_display.columns:
                  df_display = df_display.rename(columns={'所属行业': '所属板块'})
              
+             # --- 1. Block Filter (Industry) ---
              if '所属板块' in df_display.columns:
                  all_blocks = sorted(df_display['所属板块'].astype(str).unique().tolist())
-                 # E-commerce style filter buttons
-                 selected_blocks = st.pills("🔍 按板块筛选 (支持多选) / Filter by Block:", all_blocks, selection_mode="multi")
+                 selected_blocks = st.pills("🔍 按板块筛选 (支持多选) / Filter by Block:", all_blocks, selection_mode="multi", key="pills_block")
                  
                  if selected_blocks:
                      df_display = df_display[df_display['所属板块'].isin(selected_blocks)]
+            
+             # --- 2. Concept Filter (Dynamic) ---
+             if '所属概念' in df_display.columns:
+                 # Generate concepts from currently visible data (Faceted Search)
+                 current_concepts_raw = df_display['所属概念'].fillna("").astype(str)
+                 all_concepts_set = set()
+                 for s in current_concepts_raw:
+                     if s:
+                         all_concepts_set.update(s.split(";"))
+                 
+                 all_concepts = sorted(list(all_concepts_set))
+                 
+                 if all_concepts:
+                     selected_concepts = st.pills("🏷️ 按概念筛选 (支持多选) / Filter by Concept:", all_concepts, selection_mode="multi", key="pills_concept")
+                     
+                     if selected_concepts:
+                         # Filter: Match ANY selected concept
+                         # Use list comprehension for safety against special chars in concepts
+                         def match_concepts(row_concepts):
+                             if not row_concepts: return False
+                             rc = str(row_concepts)
+                             return any(sc in rc for sc in selected_concepts)
+                             
+                         df_display = df_display[df_display['所属概念'].apply(match_concepts)]
 
-             # --- Prepare Display Data (Links etc) ---
+             # --- Prepare Display Data ---
              def get_em_url(code):
                  if str(code).startswith(('6', '9')): prefix = "sh"
                  elif str(code).startswith(('0', '3')): prefix = "sz"
@@ -402,12 +425,11 @@ with tab_search:
                  df_display['最新价'] = pd.to_numeric(df_display['最新价'], errors='coerce')
              
              # Columns to show
-             # Use '所属板块' instead of '所属行业'
-             cols = ['日期', '代码_URL', '名称_URL', '所属板块', '最新价', '换手率', '最后封板时间', '炸板次数', '连板数']
-             # Filter cols just in case
+             # Added '所属概念'
+             cols = ['日期', '代码_URL', '名称_URL', '所属板块', '所属概念', '最新价', '换手率', '最后封板时间', '连板数']
              cols_to_show = [c for c in cols if c in df_display.columns]
 
-             # Render Dataframe with native selection
+             # Render Dataframe
              event = st.dataframe(
                  df_display[cols_to_show],
                  hide_index=True,
@@ -422,6 +444,7 @@ with tab_search:
                      "名称_URL": st.column_config.LinkColumn(
                          "名称", display_text=r".*#(.*)"
                      ),
+                     "所属概念": st.column_config.TextColumn("所属概念", width="medium"),
                      "最后封板时间": st.column_config.TextColumn("最后封板时间"),
                      "最新价": st.column_config.NumberColumn("最新价", format="%.2f"),
                      "换手率": st.column_config.NumberColumn("换手率", format="%.2f%%"),
@@ -431,8 +454,7 @@ with tab_search:
              # Process Selection
              selected_rows = event.selection.rows
              if selected_rows:
-                 # Use index to retrieve Name from display df
-                 # Streamlit returns row indices relative to the source dataframe (df_display)
+                 # Use index to retrieve Name from df_display
                  selected_names = df_display.iloc[selected_rows]['名称'].tolist()
                  names_str = ",".join(selected_names)
                  
