@@ -223,7 +223,7 @@ with tab_analysis:
             fav_display['名称_URL'] = fav_display.apply(lambda x: f"{x['代码_URL']}#{x['基金名称']}", axis=1)
             
             # Columns
-            cols = ['代码_URL', '名称_URL', '基金类型', '估算净值', '估算涨幅', '加入时间']
+            cols = ['代码_URL', '名称_URL', '基金类型', '估算净值', '估算涨幅', '估算时间', '加入时间']
             cols = [c for c in cols if c in fav_display.columns]
             
             # Display
@@ -232,7 +232,8 @@ with tab_analysis:
                 column_config={
                     "代码_URL": st.column_config.LinkColumn("基金代码", display_text=r"http://fund\.eastmoney\.com/(\d+)\.html"),
                     "名称_URL": st.column_config.LinkColumn("基金名称", display_text=r".*#(.*)"),
-                    "估算涨幅": st.column_config.TextColumn("估算涨幅"), # Keep as text to preserve color/sign if any
+                    "估算涨幅": st.column_config.TextColumn("估算涨幅"),
+                    "估算时间": st.column_config.TextColumn("估算时间"),
                 },
                 use_container_width=True,
                 hide_index=True,

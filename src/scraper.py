@@ -201,6 +201,18 @@ def fetch_fund_estimation_batch(fund_codes: list[str] = None) -> pd.DataFrame:
         }
         df = df.rename(columns=rename_map)
         
+        # Extract Valuation Time (Date) from the column name
+        # Example val_col: '2025-12-25-估算数据-估算值'
+        est_time = "Unknown"
+        if val_col:
+            try:
+                # Extract the part before '-估算'
+                est_time = val_col.split('-估算')[0]
+            except:
+                est_time = "Unknown"
+        
+        df['估算时间'] = est_time
+        
         # Ensure Code is string
         df['基金代码'] = df['基金代码'].astype(str)
         
@@ -210,7 +222,7 @@ def fetch_fund_estimation_batch(fund_codes: list[str] = None) -> pd.DataFrame:
             target_codes = [str(c) for c in fund_codes]
             df = df[df['基金代码'].isin(target_codes)]
             
-        return df[['基金代码', '估算净值', '估算涨幅']]
+        return df[['基金代码', '估算净值', '估算涨幅', '估算时间']]
         
     except Exception as e:
         print(f"Error fetching estimation: {e}")
