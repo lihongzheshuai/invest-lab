@@ -7,6 +7,7 @@ import concurrent.futures
 def get_stock_concepts_eastmoney(symbol):
     """
     Fetch concepts for a single stock from EastMoney.
+    Returns: (industry, concepts_string)
     """
     try:
         # Determine prefix
@@ -25,11 +26,46 @@ def get_stock_concepts_eastmoney(symbol):
         data = r.json()
         
         if 'ssbk' in data and data['ssbk']:
-            concepts = [item['BOARD_NAME'] for item in data['ssbk']]
-            return ";".join(concepts)
+            # Sort by RANK to find Industry (usually Rank 1)
+            ssbk = sorted(data['ssbk'], key=lambda x: x.get('BOARD_RANK', 99))
+            industry = ssbk[0]['BOARD_NAME'] if ssbk else ""
+            concepts = [item['BOARD_NAME'] for item in ssbk]
+            return industry, ";".join(concepts)
     except Exception:
-        return ""
-    return ""
+        return "", ""
+    return "", ""
+
+def _enrich_with_concepts(df: pd.DataFrame) -> pd.DataFrame:
+    """Helper to fetch concepts concurrently and update the dataframe."""
+    print("正在抓取个股概念数据 (多线程)...")
+    
+    # Initialize columns if not present
+    if '所属概念' not in df.columns:
+        df['所属概念'] = ""
+    # We might overwrite '所属行业' if the source didn't provide it (e.g. spot data)
+    # If source provided it (limit up data), we can keep it or prefer EastMoney's result?
+    # Let's prefer EastMoney result for consistency if '所属行业' is missing or we want to ensure Concept matches Block.
+    # But Limit Up API '所属行业' is usually good.
+    # Let's fill '所属行业' only if missing/empty.
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+        future_to_index = {
+            executor.submit(get_stock_concepts_eastmoney, row['代码']): index 
+            for index, row in df.iterrows()
+        }
+        
+        for future in concurrent.futures.as_completed(future_to_index):
+            index = future_to_index[future]
+            try:
+                industry, concepts = future.result()
+                df.at[index, '所属概念'] = concepts
+                
+                # If Industry is missing or we want to enforce it from Concept source
+                if '所属行业' not in df.columns or pd.isna(df.at[index, '所属行业']) or df.at[index, '所属行业'] == "":
+                    df.at[index, '所属行业'] = industry
+            except Exception:
+                pass
+    return df
 
 def get_limit_up_model(date: str = None):
     # 1. 获取数据：自动寻找最近一个有数据的交易日
@@ -68,32 +104,19 @@ def get_limit_up_model(date: str = None):
 
     # 2. 数据处理与格式化
     # 检查必要列是否存在
-    required_columns = ['炸板次数', '换手率', '最后封板时间', '代码', '名称', '所属行业', '连板数', '最新价']
+    required_columns = ['炸板次数', '换手率', '最后封板时间', '代码', '名称', '所属行业', '连板数', '最新价', '涨跌幅']
     missing_cols = [col for col in required_columns if col not in df.columns]
     if missing_cols:
         print(f"数据源缺失必要列: {missing_cols}")
+        # Try to proceed if only '涨跌幅' is missing? Usually it's there.
+        # If strict, return empty.
         return pd.DataFrame()
 
     # 复制一份数据进行处理
     result = df.copy()
     
-    # --- 新增：并发获取个股概念 ---
-    print("正在抓取个股概念数据 (多线程)...")
-    result['所属概念'] = "" # Initialize
-    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
-        future_to_index = {
-            executor.submit(get_stock_concepts_eastmoney, row['代码']): index 
-            for index, row in result.iterrows()
-        }
-        
-        for future in concurrent.futures.as_completed(future_to_index):
-            index = future_to_index[future]
-            try:
-                concepts = future.result()
-                result.at[index, '所属概念'] = concepts
-            except Exception:
-                pass
-    # ---------------------------
+    # 并发获取个股概念
+    result = _enrich_with_concepts(result)
 
     # 格式化最后封板时间为 HH:MM:SS
     def format_time(t_str):
@@ -105,9 +128,9 @@ def get_limit_up_model(date: str = None):
     # 转换数值列
     result['换手率'] = pd.to_numeric(result['换手率'], errors='coerce')
     result['最新价'] = pd.to_numeric(result['最新价'], errors='coerce')
+    result['涨跌幅'] = pd.to_numeric(result['涨跌幅'], errors='coerce')
 
     # 3. 结果排序：优先按连板数降序，其次按最后封板时间升序
-    # 注意：最后封板时间是字符串，升序即时间越早越前
     result = result.sort_values(by=['连板数', '最后封板时间'], ascending=[False, True])
     
     # 添加日期列以便前端展示
@@ -115,6 +138,51 @@ def get_limit_up_model(date: str = None):
         result['日期'] = used_date
 
     # 确保返回列包含日期和概念
+    final_cols = ['日期'] + required_columns + ['所属概念']
+    return result[final_cols]
+
+def get_stocks_by_gain(min_gain: float):
+    """
+    获取涨幅大于等于 min_gain 的个股清单。
+    返回格式与 get_limit_up_model 保持一致。
+    """
+    print(f"正在获取涨幅 >= {min_gain}% 的实时数据...")
+    try:
+        df = ak.stock_zh_a_spot_em()
+    except Exception as e:
+        print(f"获取实时数据失败: {e}")
+        return pd.DataFrame()
+    
+    if df.empty:
+        return pd.DataFrame()
+        
+    # Filter by gain
+    df['涨跌幅'] = pd.to_numeric(df['涨跌幅'], errors='coerce')
+    result = df[df['涨跌幅'] >= min_gain].copy()
+    
+    if result.empty:
+        print("无满足条件的个股。")
+        return pd.DataFrame()
+    
+    # Fill missing columns to match Limit Up schema
+    # required_columns = ['炸板次数', '换手率', '最后封板时间', '代码', '名称', '所属行业', '连板数', '最新价', '涨跌幅']
+    result['炸板次数'] = 0
+    result['最后封板时间'] = ""
+    result['连板数'] = 0
+    result['所属行业'] = "" # Will be filled by enrichment
+    result['日期'] = datetime.now().strftime("%Y%m%d")
+    
+    # Enrich
+    result = _enrich_with_concepts(result)
+    
+    # Ensure types
+    result['换手率'] = pd.to_numeric(result['换手率'], errors='coerce')
+    result['最新价'] = pd.to_numeric(result['最新价'], errors='coerce')
+    
+    # Sort by Gain desc
+    result = result.sort_values(by='涨跌幅', ascending=False)
+    
+    required_columns = ['炸板次数', '换手率', '最后封板时间', '代码', '名称', '所属行业', '连板数', '最新价', '涨跌幅']
     final_cols = ['日期'] + required_columns + ['所属概念']
     return result[final_cols]
 

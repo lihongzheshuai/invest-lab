@@ -10,7 +10,7 @@ from src.analyzer import analyze_position_changes, search_funds_by_stocks, searc
 from src.translations import get_text, translate_df_columns, translate_change_types
 from src.data_manager import FUNDS_LIST_PATH, HOLDINGS_DIR, fetch_and_save_fund_list, load_favorites, add_favorite, remove_favorites
 from src.utils import get_latest_report_quarter, run_async_loop
-from src.stocks.stocks import get_limit_up_model
+from src.stocks.stocks import get_limit_up_model, get_stocks_by_gain
 
 st.set_page_config(page_title=get_text('app_title'), layout="wide")
 
@@ -440,13 +440,28 @@ with tab_analysis:
 with tab_search:
     st.header(get_text('tab_search'))
 
-    # --- Limit Up Stocks Feature (Added) ---
-    with st.expander("🔥 每日涨停股池 (辅助填入) / Daily Limit-Up Stocks Helper", expanded=False):
-        if st.button("获取/刷新 今日涨停股 / Fetch Limit-Up Stocks"):
+    # --- Limit Up / Strong Stocks Helper ---
+    with st.expander("🔥 每日涨停/强势股池 (辅助填入) / Daily Strong Stocks Helper", expanded=False):
+        
+        # Controls Layout
+        c_btn_zt, c_btn_gain, c_input_gain, c_dummy = st.columns([2, 2, 1.5, 4])
+        
+        # 1. Get Limit Up
+        if c_btn_zt.button("🔥 获取今日涨停股 / Limit-Up"):
              with st.spinner("正在获取涨停数据... / Fetching data..."):
                  try:
                      df_limit = get_limit_up_model()
                      st.session_state['limit_up_df'] = df_limit
+                 except Exception as e:
+                     st.error(f"获取失败 / Failed: {e}")
+        
+        # 2. Get High Gain
+        min_gain = c_input_gain.number_input("涨幅% / Min Gain", value=9.0, step=0.5, label_visibility="collapsed")
+        if c_btn_gain.button(f"📈 获取涨幅 >{min_gain}%"):
+             with st.spinner(f"正在获取涨幅 >{min_gain}% 个股..."):
+                 try:
+                     df_gain = get_stocks_by_gain(min_gain)
+                     st.session_state['limit_up_df'] = df_gain
                  except Exception as e:
                      st.error(f"获取失败 / Failed: {e}")
         
@@ -466,7 +481,6 @@ with tab_search:
              if '所属板块' in df_display.columns:
                  # Calculate counts
                  block_counts = df_display['所属板块'].value_counts()
-                 # Sort by count desc
                  all_blocks = block_counts.sort_values(ascending=False).index.tolist()
                  
                  def format_block_label(option):
@@ -533,13 +547,16 @@ with tab_search:
              # Ensure numeric types
              if '最新价' in df_display.columns:
                  df_display['最新价'] = pd.to_numeric(df_display['最新价'], errors='coerce')
+             if '涨跌幅' in df_display.columns:
+                 df_display['涨跌幅'] = pd.to_numeric(df_display['涨跌幅'], errors='coerce')
              
              # Columns to show
-             # Added '所属概念'
-             cols = ['日期', '代码_URL', '名称_URL', '所属板块', '所属概念', '最新价', '换手率', '最后封板时间', '连板数']
+             # Added '涨跌幅'
+             cols = ['日期', '代码_URL', '名称_URL', '所属板块', '所属概念', '最新价', '涨跌幅', '换手率', '最后封板时间', '连板数']
+             # Filter cols just in case
              cols_to_show = [c for c in cols if c in df_display.columns]
 
-             # Render Dataframe
+             # Render Dataframe with native selection
              event = st.dataframe(
                  df_display[cols_to_show],
                  hide_index=True,
@@ -557,6 +574,7 @@ with tab_search:
                      "所属概念": st.column_config.TextColumn("所属概念", width="medium"),
                      "最后封板时间": st.column_config.TextColumn("最后封板时间"),
                      "最新价": st.column_config.NumberColumn("最新价", format="%.2f"),
+                     "涨跌幅": st.column_config.NumberColumn("涨跌幅", format="%.2f%%"),
                      "换手率": st.column_config.NumberColumn("换手率", format="%.2f%%"),
                  }
              )
@@ -565,6 +583,7 @@ with tab_search:
              selected_rows = event.selection.rows
              if selected_rows:
                  # Use index to retrieve Name from df_display
+                 # Streamlit returns row indices relative to the source dataframe (df_display)
                  selected_names = df_display.iloc[selected_rows]['名称'].tolist()
                  names_str = ",".join(selected_names)
                  
