@@ -378,8 +378,21 @@ with tab_search:
              
              # --- 1. Block Filter (Industry) ---
              if '所属板块' in df_display.columns:
-                 all_blocks = sorted(df_display['所属板块'].astype(str).unique().tolist())
-                 selected_blocks = st.pills("🔍 按板块筛选 (支持多选) / Filter by Block:", all_blocks, selection_mode="multi", key="pills_block")
+                 # Calculate counts
+                 block_counts = df_display['所属板块'].value_counts()
+                 # Sort by count desc
+                 all_blocks = block_counts.sort_values(ascending=False).index.tolist()
+                 
+                 def format_block_label(option):
+                     return f"{option} ({block_counts.get(option, 0)})"
+
+                 selected_blocks = st.pills(
+                     "🔍 按板块筛选 (支持多选) / Filter by Block:", 
+                     all_blocks, 
+                     selection_mode="multi", 
+                     format_func=format_block_label,
+                     key="pills_block"
+                 )
                  
                  if selected_blocks:
                      df_display = df_display[df_display['所属板块'].isin(selected_blocks)]
@@ -388,19 +401,30 @@ with tab_search:
              if '所属概念' in df_display.columns:
                  # Generate concepts from currently visible data (Faceted Search)
                  current_concepts_raw = df_display['所属概念'].fillna("").astype(str)
-                 all_concepts_set = set()
+                 
+                 # Count concepts
+                 concept_list = []
                  for s in current_concepts_raw:
                      if s:
-                         all_concepts_set.update(s.split(";"))
+                         concept_list.extend(s.split(";"))
                  
-                 all_concepts = sorted(list(all_concepts_set))
-                 
-                 if all_concepts:
-                     selected_concepts = st.pills("🏷️ 按概念筛选 (支持多选) / Filter by Concept:", all_concepts, selection_mode="multi", key="pills_concept")
+                 if concept_list:
+                     concept_counts = pd.Series(concept_list).value_counts()
+                     all_concepts = concept_counts.sort_values(ascending=False).index.tolist()
+                     
+                     def format_concept_label(option):
+                         return f"{option} ({concept_counts.get(option, 0)})"
+     
+                     selected_concepts = st.pills(
+                         "🏷️ 按概念筛选 (支持多选) / Filter by Concept:", 
+                         all_concepts, 
+                         selection_mode="multi", 
+                         format_func=format_concept_label,
+                         key="pills_concept"
+                     )
                      
                      if selected_concepts:
                          # Filter: Match ANY selected concept
-                         # Use list comprehension for safety against special chars in concepts
                          def match_concepts(row_concepts):
                              if not row_concepts: return False
                              rc = str(row_concepts)
