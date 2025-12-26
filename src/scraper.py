@@ -170,3 +170,48 @@ def batch_fetch_holdings(fund_codes: list[str], year: int, progress_callback=Non
             
     if progress_callback:
         progress_callback(total, total, f"Completed. Success: {success_count}/{total}")
+
+def fetch_fund_estimation_batch(fund_codes: list[str] = None) -> pd.DataFrame:
+    """
+    Fetch real-time fund valuation estimation.
+    """
+    try:
+        print("Fetching real-time fund estimation from Akshare...")
+        df = ak.fund_value_estimation_em(symbol='全部')
+        
+        if df.empty:
+            return pd.DataFrame()
+
+        # Identify columns dynamically
+        code_col = next((c for c in df.columns if '基金代码' in c), None)
+        
+        # Columns like '2025-12-25-估算数据-估算值'
+        val_col = next((c for c in df.columns if '估算' in c and '估算值' in c), None)
+        rate_col = next((c for c in df.columns if '估算' in c and '增长率' in c), None)
+        
+        if not (code_col and val_col and rate_col):
+            print("Could not identify estimation columns.")
+            return pd.DataFrame()
+            
+        # Rename
+        rename_map = {
+            code_col: '基金代码',
+            val_col: '估算净值',
+            rate_col: '估算涨幅'
+        }
+        df = df.rename(columns=rename_map)
+        
+        # Ensure Code is string
+        df['基金代码'] = df['基金代码'].astype(str)
+        
+        # Filter
+        if fund_codes:
+            # Ensure input codes are strings
+            target_codes = [str(c) for c in fund_codes]
+            df = df[df['基金代码'].isin(target_codes)]
+            
+        return df[['基金代码', '估算净值', '估算涨幅']]
+        
+    except Exception as e:
+        print(f"Error fetching estimation: {e}")
+        return pd.DataFrame()

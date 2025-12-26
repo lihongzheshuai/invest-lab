@@ -5,10 +5,10 @@ import os
 import asyncio
 from datetime import datetime, date
 
-from src.scraper import fetch_fund_info, fetch_fund_holdings, fetch_fund_nav, batch_fetch_holdings
+from src.scraper import fetch_fund_info, fetch_fund_holdings, fetch_fund_nav, batch_fetch_holdings, fetch_fund_estimation_batch
 from src.analyzer import analyze_position_changes, search_funds_by_stocks, search_funds_by_stocks_async, check_cache_coverage, query_reverse_index_direct, load_reverse_index
 from src.translations import get_text, translate_df_columns, translate_change_types
-from src.data_manager import FUNDS_LIST_PATH, HOLDINGS_DIR, fetch_and_save_fund_list
+from src.data_manager import FUNDS_LIST_PATH, HOLDINGS_DIR, fetch_and_save_fund_list, load_favorites, add_favorite, remove_favorites
 from src.utils import get_latest_report_quarter, run_async_loop
 from src.stocks.stocks import get_limit_up_model
 
@@ -190,6 +190,66 @@ with tab_overview:
 # Tab 2: Analysis
 # ==========================================
 with tab_analysis:
+    # --- Favorites Section ---
+    with st.expander("❤️ 我的自选基金 / My Favorites", expanded=False):
+        fav_df = load_favorites()
+        if not fav_df.empty:
+            # Control Bar
+            c_fav_1, c_fav_2, c_fav_dummy = st.columns([1, 1, 4])
+            
+            if c_fav_1.button("🔄 刷新估值 / Refresh Est."):
+                with st.spinner("Fetching real-time data..."):
+                    est_df = fetch_fund_estimation_batch(fav_df['基金代码'].tolist())
+                    if not est_df.empty:
+                        st.session_state['fav_estimation'] = est_df
+                    else:
+                        st.warning("Failed to fetch estimation.")
+            
+            # Data Preparation
+            fav_display = fav_df.copy()
+            fav_display['基金代码'] = fav_display['基金代码'].astype(str)
+            
+            # Merge Estimation
+            if 'fav_estimation' in st.session_state:
+                est_data = st.session_state['fav_estimation']
+                est_data['基金代码'] = est_data['基金代码'].astype(str)
+                fav_display = pd.merge(fav_display, est_data, on='基金代码', how='left')
+            
+            # Links
+            def get_fund_url(code):
+                return f"http://fund.eastmoney.com/{code}.html"
+            
+            fav_display['代码_URL'] = fav_display['基金代码'].apply(get_fund_url)
+            fav_display['名称_URL'] = fav_display.apply(lambda x: f"{x['代码_URL']}#{x['基金名称']}", axis=1)
+            
+            # Columns
+            cols = ['代码_URL', '名称_URL', '基金类型', '估算净值', '估算涨幅', '加入时间']
+            cols = [c for c in cols if c in fav_display.columns]
+            
+            # Display
+            event_fav = st.dataframe(
+                fav_display[cols],
+                column_config={
+                    "代码_URL": st.column_config.LinkColumn("基金代码", display_text=r"http://fund\.eastmoney\.com/(\d+)\.html"),
+                    "名称_URL": st.column_config.LinkColumn("基金名称", display_text=r".*#(.*)"),
+                    "估算涨幅": st.column_config.TextColumn("估算涨幅"), # Keep as text to preserve color/sign if any
+                },
+                use_container_width=True,
+                hide_index=True,
+                selection_mode="multi-row",
+                on_select="rerun",
+                key="fav_table"
+            )
+            
+            # Remove Action
+            if event_fav.selection.rows:
+                if c_fav_2.button("🗑️ 移除选中 / Remove"):
+                    codes_to_remove = fav_display.iloc[event_fav.selection.rows]['基金代码'].tolist()
+                    remove_favorites(codes_to_remove)
+                    st.rerun()
+        else:
+            st.info("暂无收藏基金。请在分析或搜索结果中添加。/ No favorites yet.")
+
     # --- Control Panel (Moved from Sidebar) ---
     with st.container():
         c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
@@ -266,7 +326,32 @@ with tab_analysis:
         with st.spinner(get_text('msg_fetching')):
             # 1. Basic Info - Retained for fund name display in header
             info = fetch_fund_info(f_code)
-            st.header(get_text('header_fund', fund_code=f_code))
+            
+            # Header & Favorite Button
+            c_head, c_btn = st.columns([6, 1])
+            c_head.header(get_text('header_fund', fund_code=f_code))
+            
+            if c_btn.button("❤️ 收藏"):
+                # Resolve Name and Type
+                f_name = f_code
+                f_type = "N/A"
+                
+                # Try from funds_df (Global list)
+                if not funds_df.empty:
+                    match = funds_df[funds_df['基金代码'] == f_code]
+                    if not match.empty:
+                        f_name = match['基金简称'].iloc[0]
+                        f_type = match['基金类型'].iloc[0]
+                
+                # Fallback to info df
+                if f_name == f_code and not info.empty and '基金简称' in info.columns:
+                    f_name = info['基金简称'].iloc[0]
+                    
+                if add_favorite(f_code, f_name, f_type):
+                    st.toast(f"✅ 已收藏 {f_name}")
+                else:
+                    st.toast(f"ℹ️ {f_name} 已在收藏列表中")
+
             if not info.empty:
                 st.dataframe(info)
             
@@ -730,7 +815,7 @@ with tab_search:
             page_df.style.background_gradient(subset=[get_text('col_match_degree')], cmap="Greens"),
             use_container_width=True,
             on_select="rerun",
-            selection_mode="single-row",
+            selection_mode="multi-row",
             key="search_result_table",
             column_config={
                 code_col: st.column_config.LinkColumn(
@@ -744,7 +829,32 @@ with tab_search:
             }
         )
         
-        # --- Detail View on Selection ---
+        # --- Batch Actions ---
+        if event.selection.rows:
+            if st.button("❤️ 将选中基金加入收藏 / Batch Favorite"):
+                sel_rows = event.selection.rows
+                selected_items = page_df.iloc[sel_rows]
+                count = 0
+                for _, row in selected_items.iterrows():
+                    # Extract Code from URL
+                    try:
+                        c_url = row[code_col]
+                        code = c_url.split('/')[-1].replace('.html', '')
+                    except: continue
+                    
+                    # Extract Name from URL
+                    try:
+                        n_url = row[name_col]
+                        name = n_url.split('#')[-1]
+                    except: name = code
+                    
+                    ftype = row['类型'] if '类型' in row else "Unknown"
+                    
+                    if add_favorite(code, name, ftype):
+                        count += 1
+                st.toast(f"✅ 已添加 {count} 只基金到收藏")
+        
+        # --- Detail View on Selection (Show first) ---
         if len(event.selection.rows) > 0:
             selected_idx = event.selection.rows[0]
             # sel_fund_code is now a URL in the dataframe

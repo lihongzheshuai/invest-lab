@@ -7,12 +7,52 @@ DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 NAV_DIR = os.path.join(DATA_DIR, 'nav')
 HOLDINGS_DIR = os.path.join(DATA_DIR, 'holdings')
 FUNDS_LIST_PATH = os.path.join(DATA_DIR, 'funds.csv')
+FAVORITES_PATH = os.path.join(DATA_DIR, 'favorites.csv')
 
 def _read_csv_robust(file_path, **kwargs):
     """
     Helper to read CSV with strict UTF-8-SIG encoding.
     """
     return pd.read_csv(file_path, encoding='utf-8-sig', **kwargs)
+
+# --- Favorites Management ---
+def load_favorites() -> pd.DataFrame:
+    """Loads favorite funds from CSV."""
+    if os.path.exists(FAVORITES_PATH):
+        try:
+            return _read_csv_robust(FAVORITES_PATH, dtype={'基金代码': str})
+        except Exception as e:
+            print(f"Error loading favorites: {e}")
+    return pd.DataFrame(columns=['基金代码', '基金名称', '基金类型', '加入时间'])
+
+def save_favorites(df: pd.DataFrame):
+    """Saves favorite funds to CSV."""
+    ensure_data_dir()
+    df.to_csv(FAVORITES_PATH, index=False, encoding='utf-8-sig')
+
+def add_favorite(code: str, name: str, fund_type: str = "Unknown"):
+    """Adds a fund to favorites."""
+    df = load_favorites()
+    if code not in df['基金代码'].values:
+        new_row = pd.DataFrame([{
+            '基金代码': str(code),
+            '基金名称': name,
+            '基金类型': fund_type,
+            '加入时间': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }])
+        df = pd.concat([df, new_row], ignore_index=True)
+        save_favorites(df)
+        print(f"Added {code} to favorites.")
+        return True
+    return False
+
+def remove_favorites(codes: list):
+    """Removes a list of funds from favorites."""
+    df = load_favorites()
+    if not df.empty:
+        df = df[~df['基金代码'].isin(codes)]
+        save_favorites(df)
+        print(f"Removed {len(codes)} funds from favorites.")
 
 def ensure_data_dir():
     if not os.path.exists(DATA_DIR):
