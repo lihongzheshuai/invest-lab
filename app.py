@@ -192,64 +192,67 @@ with tab_overview:
 with tab_analysis:
     # --- Favorites Section ---
     with st.expander("❤️ 我的自选基金 / My Favorites", expanded=False):
-        fav_df = load_favorites()
-        if not fav_df.empty:
-            # Control Bar
-            c_fav_1, c_fav_2, c_fav_dummy = st.columns([1, 1, 4])
-            
-            if c_fav_1.button("🔄 刷新估值 / Refresh Est."):
-                with st.spinner("Fetching real-time data..."):
-                    est_df = fetch_fund_estimation_batch(fav_df['基金代码'].tolist())
-                    if not est_df.empty:
-                        st.session_state['fav_estimation'] = est_df
-                    else:
-                        st.warning("Failed to fetch estimation.")
-            
-            # Data Preparation
-            fav_display = fav_df.copy()
-            fav_display['基金代码'] = fav_display['基金代码'].astype(str)
-            
-            # Merge Estimation
-            if 'fav_estimation' in st.session_state:
-                est_data = st.session_state['fav_estimation']
-                est_data['基金代码'] = est_data['基金代码'].astype(str)
-                fav_display = pd.merge(fav_display, est_data, on='基金代码', how='left')
-            
-            # Links
-            def get_fund_url(code):
-                return f"http://fund.eastmoney.com/{code}.html"
-            
-            fav_display['代码_URL'] = fav_display['基金代码'].apply(get_fund_url)
-            fav_display['名称_URL'] = fav_display.apply(lambda x: f"{x['代码_URL']}#{x['基金名称']}", axis=1)
-            
-            # Columns
-            cols = ['代码_URL', '名称_URL', '基金类型', '估算净值', '估算涨幅', '估算时间', '加入时间']
-            cols = [c for c in cols if c in fav_display.columns]
-            
-            # Display
-            event_fav = st.dataframe(
-                fav_display[cols],
-                column_config={
-                    "代码_URL": st.column_config.LinkColumn("基金代码", display_text=r"http://fund\.eastmoney\.com/(\d+)\.html"),
-                    "名称_URL": st.column_config.LinkColumn("基金名称", display_text=r".*#(.*)"),
-                    "估算涨幅": st.column_config.TextColumn("估算涨幅"),
-                    "估算时间": st.column_config.TextColumn("估算时间"),
-                },
-                use_container_width=True,
-                hide_index=True,
-                selection_mode="multi-row",
-                on_select="rerun",
-                key="fav_table"
-            )
-            
-            # Remove Action
-            if event_fav.selection.rows:
-                if c_fav_2.button("🗑️ 移除选中 / Remove"):
-                    codes_to_remove = fav_display.iloc[event_fav.selection.rows]['基金代码'].tolist()
-                    remove_favorites(codes_to_remove)
-                    st.rerun()
-        else:
-            st.info("暂无收藏基金。请在分析或搜索结果中添加。/ No favorites yet.")
+        try:
+            fav_df = load_favorites()
+            if not fav_df.empty:
+                # Control Bar
+                c_fav_1, c_fav_2, c_fav_dummy = st.columns([1, 1, 4])
+                
+                if c_fav_1.button("🔄 刷新估值 / Refresh Est."):
+                    with st.spinner("Fetching real-time data..."):
+                        est_df = fetch_fund_estimation_batch(fav_df['基金代码'].tolist())
+                        if not est_df.empty:
+                            st.session_state['fav_estimation'] = est_df
+                        else:
+                            st.warning("Failed to fetch estimation.")
+                
+                # Data Preparation
+                fav_display = fav_df.copy()
+                fav_display['基金代码'] = fav_display['基金代码'].astype(str)
+                
+                # Merge Estimation
+                if 'fav_estimation' in st.session_state:
+                    est_data = st.session_state['fav_estimation']
+                    est_data['基金代码'] = est_data['基金代码'].astype(str)
+                    fav_display = pd.merge(fav_display, est_data, on='基金代码', how='left')
+                
+                # Links
+                def get_fund_url(code):
+                    return f"http://fund.eastmoney.com/{code}.html"
+                
+                fav_display['代码_URL'] = fav_display['基金代码'].apply(get_fund_url)
+                fav_display['名称_URL'] = fav_display.apply(lambda x: f"{x['代码_URL']}#{x['基金名称']}", axis=1)
+                
+                # Columns
+                cols = ['代码_URL', '名称_URL', '基金类型', '估算净值', '估算涨幅', '估算时间', '加入时间']
+                cols = [c for c in cols if c in fav_display.columns]
+                
+                # Display
+                event_fav = st.dataframe(
+                    fav_display[cols],
+                    column_config={
+                        "代码_URL": st.column_config.LinkColumn("基金代码", display_text=r"http://fund\.eastmoney\.com/(\d+)\.html"),
+                        "名称_URL": st.column_config.LinkColumn("基金名称", display_text=r".*#(.*)"),
+                        "估算涨幅": st.column_config.TextColumn("估算涨幅"),
+                        "估算时间": st.column_config.TextColumn("估算时间"),
+                    },
+                    use_container_width=True,
+                    hide_index=True,
+                    selection_mode="multi-row",
+                    on_select="rerun",
+                    key="fav_table"
+                )
+                
+                # Remove Action
+                if event_fav.selection.rows:
+                    if c_fav_2.button("🗑️ 移除选中 / Remove"):
+                        codes_to_remove = fav_display.iloc[event_fav.selection.rows]['基金代码'].tolist()
+                        remove_favorites(codes_to_remove)
+                        st.rerun()
+            else:
+                st.info("暂无收藏基金。请在分析或搜索结果中添加。/ No favorites yet.")
+        except Exception as e:
+            st.error(f"Error loading favorites: {e}")
 
     # --- Control Panel (Moved from Sidebar) ---
     with st.container():
@@ -466,133 +469,136 @@ with tab_search:
                      st.error(f"获取失败 / Failed: {e}")
         
         if 'limit_up_df' in st.session_state and not st.session_state['limit_up_df'].empty:
-             st.caption("👇 勾选下方股票，可一键复制或填入搜索框 / Select stocks below to copy or auto-fill:")
-             st.caption("💡 **提示**: 点击表头第一列复选框可**全选**；点击列名可**排序** (排序状态不会因选择而重置)。")
-             
-             # Access Session State Data
-             limit_df_raw = st.session_state['limit_up_df']
-             df_display = limit_df_raw.copy()
-             
-             # Rename '所属行业' to '所属板块'
-             if '所属行业' in df_display.columns:
-                 df_display = df_display.rename(columns={'所属行业': '所属板块'})
-             
-             # --- 1. Block Filter (Industry) ---
-             if '所属板块' in df_display.columns:
-                 # Calculate counts
-                 block_counts = df_display['所属板块'].value_counts()
-                 all_blocks = block_counts.sort_values(ascending=False).index.tolist()
+             try:
+                 st.caption("👇 勾选下方股票，可一键复制或填入搜索框 / Select stocks below to copy or auto-fill:")
+                 st.caption("💡 **提示**: 点击表头第一列复选框可**全选**；点击列名可**排序** (排序状态不会因选择而重置)。")
                  
-                 def format_block_label(option):
-                     return f"{option} ({block_counts.get(option, 0)})"
-
-                 selected_blocks = st.pills(
-                     "🔍 按板块筛选 (支持多选) / Filter by Block:", 
-                     all_blocks, 
-                     selection_mode="multi", 
-                     format_func=format_block_label,
-                     key="pills_block"
-                 )
+                 # Access Session State Data
+                 limit_df_raw = st.session_state['limit_up_df']
+                 df_display = limit_df_raw.copy()
                  
-                 if selected_blocks:
-                     df_display = df_display[df_display['所属板块'].isin(selected_blocks)]
-            
-             # --- 2. Concept Filter (Dynamic) ---
-             if '所属概念' in df_display.columns:
-                 # Generate concepts from currently visible data (Faceted Search)
-                 current_concepts_raw = df_display['所属概念'].fillna("").astype(str)
+                 # Rename '所属行业' to '所属板块'
+                 if '所属行业' in df_display.columns:
+                     df_display = df_display.rename(columns={'所属行业': '所属板块'})
                  
-                 # Count concepts
-                 concept_list = []
-                 for s in current_concepts_raw:
-                     if s:
-                         concept_list.extend(s.split(";"))
-                 
-                 if concept_list:
-                     concept_counts = pd.Series(concept_list).value_counts()
-                     all_concepts = concept_counts.sort_values(ascending=False).index.tolist()
+                 # --- 1. Block Filter (Industry) ---
+                 if '所属板块' in df_display.columns:
+                     # Calculate counts
+                     block_counts = df_display['所属板块'].value_counts()
+                     all_blocks = block_counts.sort_values(ascending=False).index.tolist()
                      
-                     def format_concept_label(option):
-                         return f"{option} ({concept_counts.get(option, 0)})"
-     
-                     selected_concepts = st.pills(
-                         "🏷️ 按概念筛选 (支持多选) / Filter by Concept:", 
-                         all_concepts, 
+                     def format_block_label(option):
+                         return f"{option} ({block_counts.get(option, 0)})"
+
+                     selected_blocks = st.pills(
+                         "🔍 按板块筛选 (支持多选) / Filter by Block:", 
+                         all_blocks, 
                          selection_mode="multi", 
-                         format_func=format_concept_label,
-                         key="pills_concept"
+                         format_func=format_block_label,
+                         key="pills_block"
                      )
                      
-                     if selected_concepts:
-                         # Filter: Match ANY selected concept
-                         def match_concepts(row_concepts):
-                             if not row_concepts: return False
-                             rc = str(row_concepts)
-                             return any(sc in rc for sc in selected_concepts)
-                             
-                         df_display = df_display[df_display['所属概念'].apply(match_concepts)]
+                     if selected_blocks:
+                         df_display = df_display[df_display['所属板块'].isin(selected_blocks)]
+                
+                 # --- 2. Concept Filter (Dynamic) ---
+                 if '所属概念' in df_display.columns:
+                     # Generate concepts from currently visible data (Faceted Search)
+                     current_concepts_raw = df_display['所属概念'].fillna("").astype(str)
+                     
+                     # Count concepts
+                     concept_list = []
+                     for s in current_concepts_raw:
+                         if s:
+                             concept_list.extend(s.split(";"))
+                     
+                     if concept_list:
+                         concept_counts = pd.Series(concept_list).value_counts()
+                         all_concepts = concept_counts.sort_values(ascending=False).index.tolist()
+                         
+                         def format_concept_label(option):
+                             return f"{option} ({concept_counts.get(option, 0)})"
+         
+                         selected_concepts = st.pills(
+                             "🏷️ 按概念筛选 (支持多选) / Filter by Concept:", 
+                             all_concepts, 
+                             selection_mode="multi", 
+                             format_func=format_concept_label,
+                             key="pills_concept"
+                         )
+                         
+                         if selected_concepts:
+                             # Filter: Match ANY selected concept
+                             def match_concepts(row_concepts):
+                                 if not row_concepts: return False
+                                 rc = str(row_concepts)
+                                 return any(sc in rc for sc in selected_concepts)
+                                 
+                             df_display = df_display[df_display['所属概念'].apply(match_concepts)]
 
-             # --- Prepare Display Data ---
-             def get_em_url(code):
-                 if str(code).startswith(('6', '9')): prefix = "sh"
-                 elif str(code).startswith(('0', '3')): prefix = "sz"
-                 elif str(code).startswith(('8', '4')): prefix = "bj"
-                 else: prefix = "sz"
-                 return f"http://quote.eastmoney.com/{prefix}{code}.html"
+                 # --- Prepare Display Data ---
+                 def get_em_url(code):
+                     if str(code).startswith(('6', '9')): prefix = "sh"
+                     elif str(code).startswith(('0', '3')): prefix = "sz"
+                     elif str(code).startswith(('8', '4')): prefix = "bj"
+                     else: prefix = "sz"
+                     return f"http://quote.eastmoney.com/{prefix}{code}.html"
 
-             # Update URL columns
-             df_display['代码_URL'] = df_display['代码'].apply(get_em_url)
-             df_display['名称_URL'] = df_display.apply(lambda x: f"{x['代码_URL']}#{x['名称']}", axis=1)
-             
-             # Ensure numeric types
-             if '最新价' in df_display.columns:
-                 df_display['最新价'] = pd.to_numeric(df_display['最新价'], errors='coerce')
-             if '涨跌幅' in df_display.columns:
-                 df_display['涨跌幅'] = pd.to_numeric(df_display['涨跌幅'], errors='coerce')
-             
-             # Columns to show
-             # Added '涨跌幅'
-             cols = ['日期', '代码_URL', '名称_URL', '所属板块', '所属概念', '最新价', '涨跌幅', '换手率', '最后封板时间', '连板数']
-             # Filter cols just in case
-             cols_to_show = [c for c in cols if c in df_display.columns]
-
-             # Render Dataframe with native selection
-             event = st.dataframe(
-                 df_display[cols_to_show],
-                 hide_index=True,
-                 use_container_width=True,
-                 on_select="rerun",
-                 selection_mode="multi-row",
-                 key="limit_up_selector",
-                 column_config={
-                     "代码_URL": st.column_config.LinkColumn(
-                         "代码", display_text=r"http://quote\.eastmoney\.com/[a-z]{2}(\d+)\.html"
-                     ),
-                     "名称_URL": st.column_config.LinkColumn(
-                         "名称", display_text=r".*#(.*)"
-                     ),
-                     "所属概念": st.column_config.TextColumn("所属概念", width="medium"),
-                     "最后封板时间": st.column_config.TextColumn("最后封板时间"),
-                     "最新价": st.column_config.NumberColumn("最新价", format="%.2f"),
-                     "涨跌幅": st.column_config.NumberColumn("涨跌幅", format="%.2f%%"),
-                     "换手率": st.column_config.NumberColumn("换手率", format="%.2f%%"),
-                 }
-             )
-             
-             # Process Selection
-             selected_rows = event.selection.rows
-             if selected_rows:
-                 # Use index to retrieve Name from df_display
-                 # Streamlit returns row indices relative to the source dataframe (df_display)
-                 selected_names = df_display.iloc[selected_rows]['名称'].tolist()
-                 names_str = ",".join(selected_names)
+                 # Update URL columns
+                 df_display['代码_URL'] = df_display['代码'].apply(get_em_url)
+                 df_display['名称_URL'] = df_display.apply(lambda x: f"{x['代码_URL']}#{x['名称']}", axis=1)
                  
-                 st.caption(f"✅ 已选 {len(selected_names)} 只股票 / Selected:")
-                 st.code(names_str, language="text")
+                 # Ensure numeric types
+                 if '最新价' in df_display.columns:
+                     df_display['最新价'] = pd.to_numeric(df_display['最新价'], errors='coerce')
+                 if '涨跌幅' in df_display.columns:
+                     df_display['涨跌幅'] = pd.to_numeric(df_display['涨跌幅'], errors='coerce')
                  
-                 if st.button("⬇️ 一键填入搜索框 / Fill Search Box"):
-                     st.session_state.search_stocks_input = names_str
-                     st.rerun()
+                 # Columns to show
+                 # Added '涨跌幅'
+                 cols = ['日期', '代码_URL', '名称_URL', '所属板块', '所属概念', '最新价', '涨跌幅', '换手率', '最后封板时间', '连板数']
+                 # Filter cols just in case
+                 cols_to_show = [c for c in cols if c in df_display.columns]
+
+                 # Render Dataframe with native selection
+                 event = st.dataframe(
+                     df_display[cols_to_show],
+                     hide_index=True,
+                     use_container_width=True,
+                     on_select="rerun",
+                     selection_mode="multi-row",
+                     key="limit_up_selector",
+                     column_config={
+                         "代码_URL": st.column_config.LinkColumn(
+                             "代码", display_text=r"http://quote\.eastmoney\.com/[a-z]{2}(\d+)\.html"
+                         ),
+                         "名称_URL": st.column_config.LinkColumn(
+                             "名称", display_text=r".*#(.*)"
+                         ),
+                         "所属概念": st.column_config.TextColumn("所属概念", width="medium"),
+                         "最后封板时间": st.column_config.TextColumn("最后封板时间"),
+                         "最新价": st.column_config.NumberColumn("最新价", format="%.2f"),
+                         "涨跌幅": st.column_config.NumberColumn("涨跌幅", format="%.2f%%"),
+                         "换手率": st.column_config.NumberColumn("换手率", format="%.2f%%"),
+                     }
+                 )
+                 
+                 # Process Selection
+                 selected_rows = event.selection.rows
+                 if selected_rows:
+                     # Use index to retrieve Name from df_display
+                     # Streamlit returns row indices relative to the source dataframe (df_display)
+                     selected_names = df_display.iloc[selected_rows]['名称'].tolist()
+                     names_str = ",".join(selected_names)
+                     
+                     st.caption(f"✅ 已选 {len(selected_names)} 只股票 / Selected:")
+                     st.code(names_str, language="text")
+                     
+                     if st.button("⬇️ 一键填入搜索框 / Fill Search Box"):
+                         st.session_state.search_stocks_input = names_str
+                         st.rerun()
+             except Exception as e:
+                 st.error(f"Error in Stocks Helper: {e}")
     
     # Calculate latest available quarter for default
     latest_year, latest_q = get_latest_report_quarter()
