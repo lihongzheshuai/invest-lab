@@ -817,26 +817,32 @@ with tab_search:
         if '估算涨幅' not in display_df.columns:
              with st.spinner("正在获取基金实时估值/涨跌幅... / Fetching real-time gains..."):
                  try:
-                     # Use unique codes
-                     codes = display_df['fund_code'].astype(str).unique().tolist()
+                     # Use unique codes. Note: display_df has translated column '基金代码' (label_fund_code)
+                     fund_code_col = get_text('label_fund_code')
+                     codes = display_df[fund_code_col].astype(str).unique().tolist()
+                     
                      # Batch fetch
                      est_df = fetch_fund_estimation_batch(codes)
                      
                      if not est_df.empty:
-                         # Merge
-                         est_df['fund_code'] = est_df['基金代码'].astype(str)
-                         # Select relevant columns
-                         est_subset = est_df[['fund_code', '估算涨幅', '估算时间']]
-                         # Merge left
-                         display_df = pd.merge(display_df, est_subset, on='fund_code', how='left')
+                         # Prepare right side
+                         # est_df has '基金代码' (raw) -> We map it to merge
+                         # To avoid confusion, let's use a temporary key
+                         est_df['merge_key'] = est_df['基金代码'].astype(str)
+                         est_subset = est_df[['merge_key', '估算涨幅', '估算时间']]
                          
-                         # Ensure numeric for sorting (remove %)
-                         # Akshare usually returns string "1.23%" or float?
-                         # My fetch_fund_estimation_batch returns what akshare gives. 
-                         # Usually string with %. Let's clean it for sorting if needed.
-                         # Actually, column_config NumberColumn expects number.
-                         # Let's try to convert.
-                         display_df['估算涨幅_num'] = pd.to_numeric(display_df['估算涨幅'].str.replace('%', ''), errors='coerce')
+                         # Merge
+                         display_df = pd.merge(
+                             display_df, 
+                             est_subset, 
+                             left_on=fund_code_col, 
+                             right_on='merge_key', 
+                             how='left'
+                         )
+                         
+                         # Drop temp key
+                         display_df = display_df.drop(columns=['merge_key'])
+                         
                          # Update session state
                          st.session_state['search_results_df'] = display_df
                  except Exception as e:
@@ -868,12 +874,20 @@ with tab_search:
             page_df = display_df
 
         # Interactive Dataframe
-        code_col = get_text('label_fund_code')
+        # Define columns using Translated Keys
+        code_col = get_text('label_fund_code') # 基金代码
         name_col = "基金名称"
         
-        # Columns to display
-        # Default cols
-        cols_to_show = ['fund_code', 'fund_name', '基金类型', 'quarter', 'match_count', 'match_degree', 'matched_stocks']
+        cols_to_show = [
+            code_col, 
+            name_col, 
+            "类型", 
+            "报告期", 
+            get_text('col_match_count'), 
+            get_text('col_match_degree'), 
+            get_text('col_matched_stocks')
+        ]
+        
         # Add Est Gain if available
         if '估算涨幅' in display_df.columns:
             cols_to_show.insert(3, '估算涨幅')
@@ -881,13 +895,6 @@ with tab_search:
             
         # Ensure cols exist
         cols_to_show = [c for c in cols_to_show if c in page_df.columns]
-        
-        # If we have numeric sort column, use it? 
-        # Streamlit sorts by the column displayed. 
-        # If '估算涨幅' is string "1.23%", sorting might be string-based.
-        # But if we display '估算涨幅_num', it's ugly.
-        # Streamlit 1.23+ supports sorting formatted numbers correctly? 
-        # Let's display the string '估算涨幅' for now.
         
         event = st.dataframe(
             page_df[cols_to_show].style.background_gradient(subset=[get_text('col_match_degree')], cmap="Greens"),
@@ -905,6 +912,7 @@ with tab_search:
                     display_text=r".*#(.*)"
                 ),
                 "估算涨幅": st.column_config.TextColumn("估算涨幅 (Est. Gain)"),
+                "估算时间": st.column_config.TextColumn("估算时间"),
             }
         )
         
