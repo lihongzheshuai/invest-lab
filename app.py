@@ -111,8 +111,7 @@ with tab_overview:
             # Standard Dataframe (Removed interactive 'on_select' to ensure stability)
             st.dataframe(
                 type_counts, 
-                height=300, 
-                use_container_width=True
+                height=300
             )
 
             # --- Dropdown Filter ---
@@ -173,7 +172,6 @@ with tab_overview:
             
             st.dataframe(
                 current_page_df[['基金代码', '基金简称', '基金类型']], 
-                use_container_width=True,
                 hide_index=True
             )
             
@@ -236,7 +234,6 @@ with tab_analysis:
                         "估算涨幅": st.column_config.TextColumn("估算涨幅"),
                         "估算时间": st.column_config.TextColumn("估算时间"),
                     },
-                    use_container_width=True,
                     hide_index=True,
                     selection_mode="multi-row",
                     on_select="rerun",
@@ -563,10 +560,8 @@ with tab_search:
                  # Render Dataframe with native selection
                  event = st.dataframe(
                      df_display[cols_to_show],
-                     hide_index=True,
-                     use_container_width=True,
-                     on_select="rerun",
-                     selection_mode="multi-row",
+                                      hide_index=True,
+                                      on_select="rerun",                     selection_mode="multi-row",
                      key="limit_up_selector",
                      column_config={
                          "代码_URL": st.column_config.LinkColumn(
@@ -655,6 +650,7 @@ with tab_search:
                     
                     # Pre-display cached results while scanning continues
                     results_df = cached_df.copy()
+                    results_df['raw_fund_code'] = results_df['fund_code'].astype(str)
                     if not funds_df.empty:
                         results_df['fund_code'] = results_df['fund_code'].astype(str)
                         merged = pd.merge(results_df, funds_df[['基金代码', '基金简称', '基金类型']], left_on='fund_code', right_on='基金代码', how='left')
@@ -767,6 +763,7 @@ with tab_search:
         if not results_df.empty:
             # Deduplicate by fund_code
             results_df.drop_duplicates(subset=['fund_code'], inplace=True)
+            results_df['raw_fund_code'] = results_df['fund_code'].astype(str)
             
             # Process for display
             if not funds_df.empty:
@@ -835,7 +832,7 @@ with tab_search:
                          display_df = pd.merge(
                              display_df, 
                              est_subset, 
-                             left_on=fund_code_col, 
+                             left_on='raw_fund_code', 
                              right_on='merge_key', 
                              how='left'
                          )
@@ -898,7 +895,6 @@ with tab_search:
         
         event = st.dataframe(
             page_df[cols_to_show].style.background_gradient(subset=[get_text('col_match_degree')], cmap="Greens"),
-            use_container_width=True,
             on_select="rerun",
             selection_mode="multi-row",
             key="search_result_table",
