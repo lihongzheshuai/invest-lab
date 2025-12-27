@@ -589,9 +589,15 @@ with tab_search:
                      st.caption(f"✅ 已选 {len(selected_names)} 只股票 / Selected:")
                      st.code(names_str, language="text")
                      
-                     if st.button("⬇️ 一键填入搜索框 / Fill Search Box"):
-                         st.session_state.search_stocks_input = names_str
-                         st.rerun()
+                 c_fill, c_search = st.columns([1, 1])
+                 if c_fill.button("⬇️ 填入 / Fill"):
+                     st.session_state.search_stocks_input = names_str
+                     st.rerun()
+                 
+                 if c_search.button("🚀 填入并查询 / Fill & Search"):
+                     st.session_state.search_stocks_input = names_str
+                     st.session_state['trigger_auto_search'] = True
+                     st.rerun()
              except Exception as e:
                  st.error(f"Error in Stocks Helper: {e}")
     
@@ -616,8 +622,13 @@ with tab_search:
     with col1:
         search_clicked = st.button(get_text('btn_search'), type="primary")
         
+    # Auto-trigger check
+    auto_trigger = st.session_state.get('trigger_auto_search', False)
+    if auto_trigger:
+        st.session_state['trigger_auto_search'] = False # Reset
+        
     # --- Search Execution Logic (Smart Resume) ---
-    if search_clicked and stock_input:
+    if (search_clicked or auto_trigger) and stock_input:
         inputs = stock_input.split(',')
         
         # 1. Filter Scope
@@ -826,7 +837,7 @@ with tab_search:
                          # est_df has '基金代码' (raw) -> We map it to merge
                          # To avoid confusion, let's use a temporary key
                          est_df['merge_key'] = est_df['基金代码'].astype(str)
-                         est_subset = est_df[['merge_key', '估算涨幅', '估算时间']]
+                         est_subset = est_df[['merge_key', '估算净值', '估算涨幅', '估算时间']]
                          
                          # Merge
                          display_df = pd.merge(
@@ -887,8 +898,9 @@ with tab_search:
         
         # Add Est Gain if available
         if '估算涨幅' in display_df.columns:
-            cols_to_show.insert(3, '估算涨幅')
-            cols_to_show.insert(4, '估算时间')
+            cols_to_show.insert(3, '估算净值')
+            cols_to_show.insert(4, '估算涨幅')
+            cols_to_show.insert(5, '估算时间')
             
         # Ensure cols exist
         cols_to_show = [c for c in cols_to_show if c in page_df.columns]
@@ -907,8 +919,9 @@ with tab_search:
                     name_col,
                     display_text=r".*#(.*)"
                 ),
-                "估算涨幅": st.column_config.TextColumn("估算涨幅 (Est. Gain)"),
-                "估算时间": st.column_config.TextColumn("估算时间"),
+                "估算净值": st.column_config.TextColumn("最新净值 (Est. NAV)"),
+                "估算涨幅": st.column_config.TextColumn("涨跌幅 (Gain)"),
+                "估算时间": st.column_config.TextColumn("时间 (Time)"),
             }
         )
         
@@ -937,39 +950,3 @@ with tab_search:
                         count += 1
                 st.toast(f"✅ 已添加 {count} 只基金到收藏")
         
-        # --- Detail View on Selection (Show first) ---
-        if len(event.selection.rows) > 0:
-            selected_idx = event.selection.rows[0]
-            # sel_fund_code is now a URL in the dataframe
-            sel_url = page_df.iloc[selected_idx][code_col]
-            # Extract code: http://fund.eastmoney.com/000001.html -> 000001
-            try:
-                sel_fund_code = sel_url.split('/')[-1].replace('.html', '')
-            except:
-                sel_fund_code = "" # Fallback
-            
-            if sel_fund_code:
-                st.divider()
-                st.subheader(f"🔍 基金详情: {sel_fund_code}")
-                
-                with st.spinner("正在加载详情..."):
-                    # 1. Info
-                    info = fetch_fund_info(sel_fund_code)
-                    st.write("**基本信息**")
-                    st.dataframe(info, use_container_width=True)
-                    
-                    # 2. NAV Chart
-                    nav_df = fetch_fund_nav(sel_fund_code)
-                    if not nav_df.empty:
-                        nav_df['净值日期'] = pd.to_datetime(nav_df['净值日期'])
-                        nav_df = nav_df.sort_values('净值日期')
-                        fig = px.line(nav_df, x='净值日期', y='单位净值', title=f"{sel_fund_code} 历史净值走势")
-                        st.plotly_chart(fig, use_container_width=True)
-                    
-                    # 3. Holdings
-                    st.write(f"**持仓明细 ({cached_year}年)**")
-                    holdings = fetch_fund_holdings(sel_fund_code, cached_year)
-                    if not holdings.empty:
-                        st.dataframe(translate_df_columns(holdings), use_container_width=True)
-                    else:
-                        st.warning("暂无持仓数据")
