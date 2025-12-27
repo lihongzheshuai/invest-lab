@@ -589,7 +589,7 @@ with tab_search:
                      st.caption(f"✅ 已选 {len(selected_names)} 只股票 / Selected:")
                      st.code(names_str, language="text")
                      
-                 c_fill, c_search = st.columns([1, 1])
+                 c_fill, c_search, c_space = st.columns([1, 1.5, 3])
                  if c_fill.button("⬇️ 填入 / Fill"):
                      st.session_state.search_stocks_input = names_str
                      st.rerun()
@@ -825,21 +825,24 @@ with tab_search:
         if '估算涨幅' not in display_df.columns:
              with st.spinner("正在获取基金实时估值/涨跌幅... / Fetching real-time gains..."):
                  try:
-                     # Use unique codes. Note: display_df has translated column '基金代码' (label_fund_code)
                      fund_code_col = get_text('label_fund_code')
-                     codes = display_df[fund_code_col].astype(str).unique().tolist()
+                     
+                     # Ensure raw_fund_code exists
+                     if 'raw_fund_code' not in display_df.columns:
+                         # Extract from URL: http://fund.eastmoney.com/000001.html
+                         display_df['raw_fund_code'] = display_df[fund_code_col].astype(str).str.findall(r'(\d{6})').str[0]
+                     
+                     codes = display_df['raw_fund_code'].unique().tolist()
                      
                      # Batch fetch
                      est_df = fetch_fund_estimation_batch(codes)
                      
                      if not est_df.empty:
                          # Prepare right side
-                         # est_df has '基金代码' (raw) -> We map it to merge
-                         # To avoid confusion, let's use a temporary key
                          est_df['merge_key'] = est_df['基金代码'].astype(str)
                          est_subset = est_df[['merge_key', '估算净值', '估算涨幅', '估算时间']]
                          
-                         # Merge
+                         # Merge using raw_fund_code
                          display_df = pd.merge(
                              display_df, 
                              est_subset, 
