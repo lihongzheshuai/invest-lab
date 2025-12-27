@@ -813,32 +813,84 @@ with tab_search:
         display_df = st.session_state['search_results_df']
         cached_year = st.session_state.get('search_year_cached', year) # Fallback to current input year if missing
         
+        # --- Enrichment: Fetch Fund Gain if missing ---
+        if '估算涨幅' not in display_df.columns:
+             with st.spinner("正在获取基金实时估值/涨跌幅... / Fetching real-time gains..."):
+                 try:
+                     # Use unique codes
+                     codes = display_df['fund_code'].astype(str).unique().tolist()
+                     # Batch fetch
+                     est_df = fetch_fund_estimation_batch(codes)
+                     
+                     if not est_df.empty:
+                         # Merge
+                         est_df['fund_code'] = est_df['基金代码'].astype(str)
+                         # Select relevant columns
+                         est_subset = est_df[['fund_code', '估算涨幅', '估算时间']]
+                         # Merge left
+                         display_df = pd.merge(display_df, est_subset, on='fund_code', how='left')
+                         
+                         # Ensure numeric for sorting (remove %)
+                         # Akshare usually returns string "1.23%" or float?
+                         # My fetch_fund_estimation_batch returns what akshare gives. 
+                         # Usually string with %. Let's clean it for sorting if needed.
+                         # Actually, column_config NumberColumn expects number.
+                         # Let's try to convert.
+                         display_df['估算涨幅_num'] = pd.to_numeric(display_df['估算涨幅'].str.replace('%', ''), errors='coerce')
+                         # Update session state
+                         st.session_state['search_results_df'] = display_df
+                 except Exception as e:
+                     st.warning(f"Failed to fetch real-time gains: {e}")
+
         st.subheader(get_text('header_search_results'))
         
-        # --- Pagination for Search Results ---
-        c_p1, c_p2, c_p3 = st.columns([1, 1, 3])
+        # --- Pagination & View Controls ---
+        c_p1, c_p2, c_p3 = st.columns([1.5, 1, 3])
         with c_p1:
-            sp_size = st.selectbox("每页显示", [10, 20, 50], key="search_page_size")
+            show_all = st.checkbox("显示全部 (支持全局排序) / Show All", value=False, key="search_show_all")
         
-        s_total = len(display_df)
-        s_pages = (s_total // sp_size) + (1 if s_total % sp_size > 0 else 0)
-        
-        with c_p2:
-            sp_num = st.number_input("页码", min_value=1, max_value=max(1, s_pages), value=1, key="search_page_num")
+        if not show_all:
+            with c_p2:
+                sp_size = st.selectbox("每页显示", [10, 20, 50], key="search_page_size")
             
-        s_start = (sp_num - 1) * sp_size
-        s_end = min(s_start + sp_size, s_total)
-        
-        st.caption(f"显示第 {s_start + 1} 到 {s_end} 条，共 {s_total} 条")
-        
-        page_df = display_df.iloc[s_start:s_end]
+            s_total = len(display_df)
+            s_pages = (s_total // sp_size) + (1 if s_total % sp_size > 0 else 0)
+            
+            with c_p3:
+                sp_num = st.number_input("页码", min_value=1, max_value=max(1, s_pages), value=1, key="search_page_num")
+                
+            s_start = (sp_num - 1) * sp_size
+            s_end = min(s_start + sp_size, s_total)
+            st.caption(f"显示第 {s_start + 1} 到 {s_end} 条，共 {s_total} 条")
+            page_df = display_df.iloc[s_start:s_end]
+        else:
+            st.caption(f"显示全部 {len(display_df)} 条记录")
+            page_df = display_df
 
         # Interactive Dataframe
         code_col = get_text('label_fund_code')
         name_col = "基金名称"
         
+        # Columns to display
+        # Default cols
+        cols_to_show = ['fund_code', 'fund_name', '基金类型', 'quarter', 'match_count', 'match_degree', 'matched_stocks']
+        # Add Est Gain if available
+        if '估算涨幅' in display_df.columns:
+            cols_to_show.insert(3, '估算涨幅')
+            cols_to_show.insert(4, '估算时间')
+            
+        # Ensure cols exist
+        cols_to_show = [c for c in cols_to_show if c in page_df.columns]
+        
+        # If we have numeric sort column, use it? 
+        # Streamlit sorts by the column displayed. 
+        # If '估算涨幅' is string "1.23%", sorting might be string-based.
+        # But if we display '估算涨幅_num', it's ugly.
+        # Streamlit 1.23+ supports sorting formatted numbers correctly? 
+        # Let's display the string '估算涨幅' for now.
+        
         event = st.dataframe(
-            page_df.style.background_gradient(subset=[get_text('col_match_degree')], cmap="Greens"),
+            page_df[cols_to_show].style.background_gradient(subset=[get_text('col_match_degree')], cmap="Greens"),
             use_container_width=True,
             on_select="rerun",
             selection_mode="multi-row",
@@ -851,7 +903,8 @@ with tab_search:
                 name_col: st.column_config.LinkColumn(
                     name_col,
                     display_text=r".*#(.*)"
-                )
+                ),
+                "估算涨幅": st.column_config.TextColumn("估算涨幅 (Est. Gain)"),
             }
         )
         
