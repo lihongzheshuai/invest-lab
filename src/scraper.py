@@ -182,15 +182,26 @@ def fetch_fund_estimation_batch(fund_codes: list[str] = None) -> pd.DataFrame:
         if df.empty:
             return pd.DataFrame()
 
-        # Identify columns dynamically
-        code_col = next((c for c in df.columns if '基金代码' in c), None)
+        # Identify columns dynamically with index fallback
+        cols = df.columns.tolist()
         
-        # Columns like '2025-12-25-估算数据-估算值'
-        val_col = next((c for c in df.columns if '估算' in c and '估算值' in c), None)
-        rate_col = next((c for c in df.columns if '估算' in c and '增长率' in c), None)
+        # 1. Fund Code
+        code_col = next((c for c in cols if '基金代码' in c), None)
+        if not code_col and len(cols) > 1:
+            code_col = cols[1]
+            
+        # 2. Est Value (usually index 3)
+        val_col = next((c for c in cols if '估算' in c and '估算值' in c), None)
+        if not val_col and len(cols) > 3:
+            val_col = cols[3]
+            
+        # 3. Est Rate (usually index 4)
+        rate_col = next((c for c in cols if '估算' in c and '增长率' in c), None)
+        if not rate_col and len(cols) > 4:
+            rate_col = cols[4]
         
         if not (code_col and val_col and rate_col):
-            print("Could not identify estimation columns.")
+            print(f"Could not identify estimation columns. Cols: {cols}")
             return pd.DataFrame()
             
         # Rename
@@ -202,12 +213,20 @@ def fetch_fund_estimation_batch(fund_codes: list[str] = None) -> pd.DataFrame:
         df = df.rename(columns=rename_map)
         
         # Extract Valuation Time (Date) from the column name
-        # Example val_col: '2025-12-25-估算数据-估算值'
+        # Example val_col: '2025-12-25-估算数据-估算值' or garbled
         est_time = "Unknown"
         if val_col:
             try:
-                # Extract the part before '-估算'
-                est_time = val_col.split('-估算')[0]
+                # Try splitting by known delimiters or take first 10 chars (YYYY-MM-DD)
+                if '-' in val_col:
+                    # Check if starts with date pattern
+                    if val_col[:4].isdigit() and val_col[4] == '-':
+                         est_time = val_col[:10]
+                    else:
+                         est_time = val_col.split('-估算')[0]
+                else:
+                    # Fallback: check if we can extract date from string
+                    pass
             except:
                 est_time = "Unknown"
         
