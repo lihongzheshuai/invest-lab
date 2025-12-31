@@ -51,6 +51,7 @@ TRANS = {
         'tab_overview': "概览",
         'tab_analysis': "基金分析",
         'tab_search': "重仓股反查",
+        'tab_lhb': "龙虎榜",
         'label_search_stocks': "输入股票名称或代码 (逗号分隔)",
         'btn_search': "查询持仓基金",
         'col_match_count': "匹配数量",

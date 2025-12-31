@@ -11,6 +11,7 @@ from src.translations import get_text, translate_df_columns, translate_change_ty
 from src.data_manager import FUNDS_LIST_PATH, HOLDINGS_DIR, fetch_and_save_fund_list, load_favorites, add_favorite, remove_favorites
 from src.utils import get_latest_report_quarter, run_async_loop
 from src.stocks.stocks import get_limit_up_model, get_stocks_by_gain
+from src.lhb import get_daily_lhb, get_lhb_hot_money
 
 st.set_page_config(page_title=get_text('app_title'), layout="wide")
 
@@ -75,9 +76,10 @@ st.markdown("""
 tab_names = [
     f"📊 {get_text('tab_overview')}", 
     f"🔍 {get_text('tab_analysis')}", 
-    f"📈 {get_text('tab_search')}"
+    f"📈 {get_text('tab_search')}",
+    f"🐲 {get_text('tab_lhb')}"
 ]
-tab_overview, tab_analysis, tab_search = st.tabs(tab_names)
+tab_overview, tab_analysis, tab_search, tab_lhb = st.tabs(tab_names)
 
 # ==========================================
 # Tab 1: Overview
@@ -373,7 +375,7 @@ with tab_analysis:
                                   fillcolor="LightSalmon", opacity=0.4, line_width=0, 
                                   annotation_text=f"{y} Q{q}", annotation_position="top left")
                 
-                st.plotly_chart(fig, width='stretch')
+                st.plotly_chart(fig, use_container_width=True)
             else:
                 st.warning(get_text('warn_no_nav'))
                 
@@ -952,4 +954,209 @@ with tab_search:
                     if add_favorite(code, name, ftype):
                         count += 1
                 st.toast(f"✅ 已添加 {count} 只基金到收藏")
+
+# ==========================================
+# Tab 4: Dragon & Tiger List (LHB)
+# ==========================================
+with tab_lhb:
+    st.header(f"🐲 {get_text('header_lhb_daily', default='每日龙虎榜分析 / Daily LHB Analysis')}")
+    
+    # --- Controls ---
+    c_date, c_btn, c_dummy = st.columns([1, 1, 4])
+    with c_date:
+        # Default to today, but allow picking past
+        lhb_date = st.date_input("选择日期 / Select Date", value=date.today())
+    
+    with c_btn:
+        st.write("") # align
+        st.write("")
+        fetch_lhb = st.button("🔍 获取榜单 / Fetch LHB", type="primary")
+
+    if fetch_lhb:
+        date_str = lhb_date.strftime("%Y%m%d")
+        
+        st.session_state['lhb_date'] = date_str
+        st.session_state['lhb_data_fetched'] = True
+        
+        with st.spinner(f"Fetching LHB data for {date_str}..."):
+            st.session_state['lhb_daily_df'] = get_daily_lhb(date_str)
+            st.session_state['lhb_hm_df'] = get_lhb_hot_money(date_str)
+
+    # --- Display ---
+    if st.session_state.get('lhb_data_fetched'):
+        date_str = st.session_state.get('lhb_date')
+        daily_df = st.session_state.get('lhb_daily_df')
+        hm_df = st.session_state.get('lhb_hm_df')
+        
+        if daily_df is not None and not daily_df.empty:
+            # 1. Summary Metrics
+            total_net_buy = daily_df['龙虎榜净买额'].sum()
+            total_stocks = len(daily_df['代码'].unique())
+            
+            c_m1, c_m2, c_m3 = st.columns(3)
+            c_m1.metric("上榜个股数", f"{total_stocks}")
+            c_m2.metric("榜单总净买额 (万)", f"{total_net_buy:,.2f}")
+            
+            # 2. Industry Analysis Section
+            st.subheader("🏭 游资进攻方向 / Industry Analysis")
+            if hm_df is not None and not hm_df.empty:
+                # Create Stock->Industry Map
+                unique_stocks = daily_df.drop_duplicates(subset=['名称'])
+                # Include more columns for drill-down
+                stock_map = unique_stocks.set_index('名称')[['代码', '所属行业', '所属概念', '龙虎榜净买额', '涨跌幅', '收盘价']].to_dict('index')
+                
+                hm_exploded = []
+                import re
+                for _, row in hm_df.iterrows():
+                    dept = row['营业部名称']
+                    net_buy = row.get('净买入额', 0)
+                    stocks_str = str(row.get('买入相关个股', ''))
+                    stocks = re.split(r'[,，\s]+', stocks_str)
+                    
+                    for s_name in stocks:
+                        if not s_name: continue
+                        # Filter: Only count stocks that actually appeared on the LHB list for this specific date
+                        if s_name not in stock_map:
+                            continue
+                            
+                        info = stock_map.get(s_name)
+                        industry = info.get('所属行业', 'Unknown')
+                        concept = info.get('所属概念', '')
+                        
+                        hm_exploded.append({
+                            '营业部': dept,
+                            '股票名称': s_name,
+                            '行业': industry,
+                            '概念': concept,
+                            '游资净买额': net_buy, # Dept's net buy
+                            '代码': info.get('代码'),
+                            '龙虎榜净买额': info.get('龙虎榜净买额'), # Stock's daily net buy
+                            '涨跌幅': info.get('涨跌幅'),
+                            '收盘价': info.get('收盘价')
+                        })
+                
+                if hm_exploded:
+                    df_analysis = pd.DataFrame(hm_exploded)
+                    
+                    # Deduplicate to count STOCKS, not participation events
+                    df_unique_stocks = df_analysis.drop_duplicates(subset=['股票名称'])
+                    
+                    # 1. Industry Analysis (Count of unique stocks per industry)
+                    ind_counts = df_unique_stocks['行业'].value_counts().reset_index()
+                    ind_counts.columns = ['行业', '上榜个股数']
+                    
+                    # 2. Concept Analysis (Count of unique stocks per concept)
+                    concepts_list = []
+                    for c_str in df_unique_stocks['概念']:
+                        if c_str:
+                            concepts_list.extend(str(c_str).split(';'))
+                    conc_counts = pd.Series(concepts_list).value_counts().reset_index()
+                    conc_counts.columns = ['概念', '上榜个股数']
+
+                    # Use Tabs for cleaner layout
+                    tab_i, tab_c = st.tabs(["🏭 行业分布 (Industry)", "🏷️ 概念分布 (Concepts)"])
+                    
+                    with tab_i:
+                        c_chart, c_table = st.columns([2, 1])
+                        with c_chart:
+                            fig = px.bar(ind_counts.head(10), x='行业', y='上榜个股数', title="热门行业 Top 10 (按个股数)", text_auto=True)
+                            fig.update_layout(height=350)
+                            # Enable selection
+                            event_i = st.plotly_chart(fig, use_container_width=True, on_select="rerun", selection_mode="points", key="chart_ind")
+                        with c_table:
+                            st.dataframe(ind_counts.head(10), hide_index=True, use_container_width=True)
+                        
+                        # Drill-down
+                        if event_i and event_i.selection["points"]:
+                            sel_ind = event_i.selection["points"][0]["x"]
+                            st.write(f"📂 **{sel_ind}** 板块个股明细:")
+                            filtered_stocks = df_unique_stocks[df_unique_stocks['行业'] == sel_ind]
+                            # Display filtered columns
+                            st.dataframe(
+                                filtered_stocks[['代码', '股票名称', '收盘价', '涨跌幅', '龙虎榜净买额']], 
+                                hide_index=True,
+                                column_config={
+                                    "龙虎榜净买额": st.column_config.NumberColumn("净买额 (万)", format="%.2f"),
+                                    "涨跌幅": st.column_config.NumberColumn("涨跌幅", format="%.2f%%"),
+                                }
+                            )
+
+                    with tab_c:
+                        c_chart2, c_table2 = st.columns([2, 1])
+                        with c_chart2:
+                            fig2 = px.bar(conc_counts.head(10), x='概念', y='上榜个股数', title="热门概念 Top 10 (按个股数)", text_auto=True, color_discrete_sequence=['#FFA15A'])
+                            fig2.update_layout(height=350)
+                            event_c = st.plotly_chart(fig2, use_container_width=True, on_select="rerun", selection_mode="points", key="chart_conc")
+                        with c_table2:
+                            st.dataframe(conc_counts.head(10), hide_index=True, use_container_width=True)
+
+                        # Drill-down
+                        if event_c and event_c.selection["points"]:
+                            sel_conc = event_c.selection["points"][0]["x"]
+                            st.write(f"📂 **{sel_conc}** 概念个股明细:")
+                            # Filter concept (contains string)
+                            filtered_stocks_c = df_unique_stocks[df_unique_stocks['概念'].astype(str).str.contains(sel_conc, regex=False)]
+                            st.dataframe(
+                                filtered_stocks_c[['代码', '股票名称', '收盘价', '涨跌幅', '龙虎榜净买额']], 
+                                hide_index=True,
+                                column_config={
+                                    "龙虎榜净买额": st.column_config.NumberColumn("净买额 (万)", format="%.2f"),
+                                    "涨跌幅": st.column_config.NumberColumn("涨跌幅", format="%.2f%%"),
+                                }
+                            )
+            
+            # 3. Daily List Table
+            st.subheader(f"📋 每日榜单详情 / Daily List ({date_str})")
+            
+            # Format Numeric
+            numeric_cols = ['收盘价', '涨跌幅', '龙虎榜净买额', '换手率']
+            for c in numeric_cols:
+                if c in daily_df.columns:
+                    daily_df[c] = pd.to_numeric(daily_df[c], errors='coerce')
+            
+            # Links
+            # Format date for URL: YYYYMMDD -> YYYY-MM-DD
+            url_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}"
+            
+            def get_em_url_lhb(code):
+                 # Standard EM LHB detail URL format: https://data.eastmoney.com/stock/lhb,2024-12-30,000547.html
+                 return f"https://data.eastmoney.com/stock/lhb,{url_date},{code}.html"
+            
+            daily_df['详情链接'] = daily_df['代码'].apply(get_em_url_lhb)
+            daily_df['名称_Link'] = daily_df.apply(lambda x: f"{x['详情链接']}#{x['名称']}", axis=1)
+
+            cols = ['名称_Link', '代码', '所属行业', '所属概念', '收盘价', '涨跌幅', '龙虎榜净买额', '换手率', '上榜原因']
+            cols = [c for c in cols if c in daily_df.columns]
+            
+            st.dataframe(
+                daily_df[cols],
+                column_config={
+                    "名称_Link": st.column_config.LinkColumn("名称", display_text=r".*#(.*)"),
+                    "龙虎榜净买额": st.column_config.NumberColumn("净买额 (万)", format="%.2f"),
+                    "涨跌幅": st.column_config.NumberColumn("涨跌幅", format="%.2f%%"),
+                    "换手率": st.column_config.NumberColumn("换手率", format="%.2f%%"),
+                    "所属概念": st.column_config.TextColumn("所属概念", width="medium"),
+                    "上榜原因": st.column_config.TextColumn("上榜原因", width="medium"),
+                },
+                hide_index=True,
+                use_container_width=True
+            )
+
+            # 4. Hot Money Section
+            with st.expander("💰 活跃营业部明细 / Active Business Departments Detail", expanded=False):
+                if hm_df is not None and not hm_df.empty:
+                    st.dataframe(
+                        hm_df,
+                        column_config={
+                            "累积买入额": st.column_config.NumberColumn("买入额 (万)", format="%.2f"),
+                            "净买入额": st.column_config.NumberColumn("净买入 (万)", format="%.2f"),
+                            "买入相关个股": st.column_config.TextColumn("买入个股", width="large"),
+                        },
+                        hide_index=True,
+                        use_container_width=True
+                    )
+                else:
+                    st.info("该日期暂无活跃游资数据。")
+        else:
+            st.info("该日期暂无龙虎榜数据。")
         

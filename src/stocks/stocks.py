@@ -35,7 +35,7 @@ def get_stock_concepts_eastmoney(symbol):
         return "", ""
     return "", ""
 
-def _enrich_with_concepts(df: pd.DataFrame) -> pd.DataFrame:
+def enrich_with_concepts(df: pd.DataFrame) -> pd.DataFrame:
     """Helper to fetch concepts concurrently and update the dataframe."""
     print("正在抓取个股概念数据 (多线程)...")
     
@@ -116,7 +116,7 @@ def get_limit_up_model(date: str = None):
     result = df.copy()
     
     # 并发获取个股概念
-    result = _enrich_with_concepts(result)
+    result = enrich_with_concepts(result)
 
     # 格式化最后封板时间为 HH:MM:SS
     def format_time(t_str):
@@ -173,7 +173,7 @@ def get_stocks_by_gain(min_gain: float):
     result['日期'] = datetime.now().strftime("%Y%m%d")
     
     # Enrich
-    result = _enrich_with_concepts(result)
+    result = enrich_with_concepts(result)
     
     # Ensure types
     result['换手率'] = pd.to_numeric(result['换手率'], errors='coerce')
